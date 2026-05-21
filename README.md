@@ -17,6 +17,36 @@ npm install
 npm run tauri dev
 ```
 
+### Building on Arch Linux
+
+`tauri build` may fail at the **AppImage** step because linuxdeploy ships an old `strip` that cannot handle modern Arch libraries (`.relr.dyn` sections). Your `.deb` / `.rpm` bundles still succeed.
+
+**Option A — full build including AppImage:**
+
+```bash
+npm run tauri:build:arch
+```
+
+This sets `NO_STRIP=1` for linuxdeploy (slightly larger AppImage, otherwise fine).
+
+**Option B — skip AppImage (recommended on Arch):**
+
+```bash
+npm run tauri build -- --bundles deb
+```
+
+Install on Debian/Ubuntu:
+
+```bash
+sudo dpkg -i src-tauri/target/release/bundle/deb/db-studio_*_amd64.deb
+```
+
+On Arch, run the binary directly or use the AppImage from `tauri:build:arch`:
+
+```bash
+./src-tauri/target/release/app
+```
+
 On first launch, use **Connect to PostgreSQL** to add a connection. Saved connections are stored locally (including password) for convenience.
 
 ### Connection defaults
