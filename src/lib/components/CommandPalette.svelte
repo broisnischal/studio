@@ -72,7 +72,7 @@
                 <Database class="size-4 opacity-60" />
                 <span class="font-mono">{schema}</span>
                 {#if schema === activeSchema}
-                  <span class="ml-auto text-[11px] text-muted-foreground">current</span>
+                  <span class="ml-auto text-ui-xs text-muted-foreground">current</span>
                 {/if}
               </Command.Item>
             {/each}
@@ -89,7 +89,7 @@
               >
                 <Table2 class="size-4 opacity-60" />
                 <span class="min-w-0 truncate font-mono">{table.name}</span>
-                <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span class="shrink-0 font-mono text-ui-xs tabular-nums text-muted-foreground">
                   {formatTableRowCount(table.rowCount)}
                 </span>
               </Command.Item>

@@ -7,18 +7,12 @@ export function getAppZoom() {
   )
   if (Number.isFinite(fromVar) && fromVar > 0) return fromVar
 
-  const app = document.getElementById('app')
-  if (app) {
-    const fromEl = Number(getComputedStyle(app).zoom)
-    if (Number.isFinite(fromEl) && fromEl > 0) return fromEl
-  }
-
   return 1
 }
 
 /**
  * Viewport position for body-portaled overlays (context menus, etc.).
- * Use raw clientX/Y — #app zoom does not require dividing coordinates.
+ * Use raw clientX/Y — scaling is via root font-size, not CSS zoom.
  * @param {number} clientX
  * @param {number} clientY
  */

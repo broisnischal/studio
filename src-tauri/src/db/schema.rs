@@ -10,7 +10,7 @@ pub struct TableInfo {
     pub row_count: i64,
 }
 
-fn validate_ident(name: &str) -> Result<(), String> {
+pub(crate) fn validate_ident(name: &str) -> Result<(), String> {
     if name.is_empty()
         || !name
             .chars()

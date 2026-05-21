@@ -36,7 +36,7 @@
       })
       .catch(() => {
         if (!cancelled) {
-          html = `<pre class="p-3 font-mono text-[12px] text-foreground whitespace-pre-wrap break-all">${escapeHtml(source)}</pre>`
+          html = `<pre class="p-3 font-mono text-ui-sm text-foreground whitespace-pre-wrap break-all">${escapeHtml(source)}</pre>`
         }
       })
       .finally(() => {
@@ -103,10 +103,10 @@
   ondblclick={handleDblClick}
 >
   {#if loading && !html}
-    <p class="px-3 py-4 font-mono text-[12px] text-muted-foreground">Highlighting…</p>
+    <p class="px-3 py-4 font-mono text-ui-sm text-muted-foreground">Highlighting…</p>
   {:else}
     <div
-      class="shiki-block contents [&_pre]:m-0 [&_pre]:bg-transparent! [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[12px] [&_pre]:leading-relaxed [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_.json-inspector-url]:cursor-pointer [&_.json-inspector-url]:text-primary [&_.json-inspector-url]:underline [&_.json-inspector-url]:underline-offset-2 [&_.json-inspector-url]:decoration-primary/50 hover:[&_.json-inspector-url]:decoration-primary"
+      class="shiki-block contents [&_pre]:m-0 [&_pre]:bg-transparent! [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-ui-sm [&_pre]:leading-relaxed [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_.json-inspector-url]:cursor-pointer [&_.json-inspector-url]:text-primary [&_.json-inspector-url]:underline [&_.json-inspector-url]:underline-offset-2 [&_.json-inspector-url]:decoration-primary/50 hover:[&_.json-inspector-url]:decoration-primary"
     >
       {@html html}
     </div>

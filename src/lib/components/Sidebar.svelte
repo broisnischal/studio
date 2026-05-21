@@ -56,7 +56,7 @@
         <button
           type="button"
           class={cn(
-            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-[11px] transition-colors',
+            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-ui-xs transition-colors',
             activeView === 'table'
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
@@ -70,7 +70,7 @@
         <button
           type="button"
           class={cn(
-            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-[11px] transition-colors',
+            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-ui-xs transition-colors',
             activeView === 'sql'
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
@@ -85,9 +85,9 @@
     {/if}
 
     <div class="flex items-center gap-1.5 px-2.5 py-2.5">
-      <span class="shrink-0 text-[12px] text-muted-foreground">schema:</span>
+      <span class="shrink-0 text-ui-sm text-muted-foreground">schema:</span>
       {#if schemas.length === 0}
-        <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">—</span>
+        <span class="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">—</span>
       {:else}
         <Select.Root
           type="single"
@@ -97,7 +97,7 @@
           }}
         >
           <Select.Trigger
-            class="h-6 min-w-0 flex-1 gap-1 border-0 bg-transparent px-0 text-[12px] font-medium shadow-none focus-visible:ring-0 [&>svg]:size-3"
+            class="h-6 min-w-0 flex-1 gap-1 border-0 bg-transparent px-0 text-ui-sm font-medium shadow-none focus-visible:ring-0 [&>svg]:size-3"
           >
             <span class="truncate">{activeSchema}</span>
           </Select.Trigger>
@@ -120,7 +120,7 @@
           placeholder=""
           value={tableFilter}
           oninput={(e) => ontablefilter(e.currentTarget.value)}
-          class="h-7 w-full rounded-md border border-border bg-background/40 pl-7 pr-2 text-[12px] outline-none focus:border-border focus:ring-1 focus:ring-ring/30"
+          class="h-7 w-full rounded-md border border-border bg-background/40 pl-7 pr-2 text-ui-sm outline-none focus:border-border focus:ring-1 focus:ring-ring/30"
         />
       </div>
       <button
@@ -151,7 +151,7 @@
     </div>
 
     <div class="flex min-h-0 flex-1 flex-col">
-      <p class="px-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+      <p class="px-3 pb-1 text-ui-2xs font-medium tracking-wide text-muted-foreground uppercase">
         Tables
       </p>
       <ScrollArea class="min-h-0 w-full flex-1">
@@ -162,14 +162,14 @@
           {#if tables.length === 0}
             <li class="flex w-full flex-col items-center gap-2 px-4 py-10 text-center">
               <Table2 class="size-7 text-muted-foreground/25" />
-              <p class="text-[12px] text-muted-foreground">
+              <p class="text-ui-sm text-muted-foreground">
                 No tables in {activeSchema || 'schema'}
               </p>
             </li>
           {:else if filteredTables.length === 0}
             <li class="flex w-full flex-col items-center gap-2 px-4 py-8 text-center">
               <Search class="size-6 text-muted-foreground/25" />
-              <p class="text-[12px] text-muted-foreground">No tables match your search</p>
+              <p class="text-ui-sm text-muted-foreground">No tables match your search</p>
             </li>
           {:else}
             {#each filteredTables as table (table.name)}
@@ -185,9 +185,9 @@
                   onclick={() => ontableselect(table.name)}
                 >
                   <Table2 class="size-3 shrink-0 opacity-50" />
-                  <span class="min-w-0 truncate font-mono text-[12px] leading-none">{table.name}</span>
+                  <span class="min-w-0 truncate font-mono text-ui-sm leading-none">{table.name}</span>
                   <span
-                    class="shrink-0 font-mono text-[11px] leading-none tabular-nums text-muted-foreground"
+                    class="shrink-0 font-mono text-ui-xs leading-none tabular-nums text-muted-foreground"
                   >
                     {formatTableRowCount(table.rowCount)}
                   </span>
@@ -203,7 +203,7 @@
 
   <footer class="flex items-center gap-1 border-t border-sidebar-border px-2 py-2">
     <span
-      class="min-w-0 flex-1 truncate px-1 text-[10px] text-muted-foreground"
+      class="min-w-0 flex-1 truncate px-1 text-ui-2xs text-muted-foreground"
       title={connectionName || 'Not connected'}
     >
       {connectionName || 'DB Studio'}

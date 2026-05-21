@@ -12,6 +12,11 @@
   import CheckSquare from '@lucide/svelte/icons/check-square'
   import PanelRight from '@lucide/svelte/icons/panel-right'
   import Table2 from '@lucide/svelte/icons/table-2'
+  import ExternalLink from '@lucide/svelte/icons/external-link'
+  import {
+    findForeignKeyForColumn,
+    foreignKeyTargetLabel,
+  } from '$lib/foreign-key-nav.js'
   import DataTableSkeleton from './DataTableSkeleton.svelte'
   import { overlayPointerPosition } from '$lib/app-zoom.js'
   import { cn } from '$lib/utils.js'
@@ -31,6 +36,7 @@
     rows = [],
     loading = false,
     primaryKey = [],
+    foreignKeys = [],
     saving = false,
     selected = $bindable(new Set()),
     /** @type {number | null} */
@@ -49,6 +55,8 @@
      * @returns {Promise<void>}
      */
     ondelete = async () => {},
+    /** @param {{ rowIdx: number, colIdx: number }} detail */
+    onfollowforeignkey = () => {},
   } = $props()
 
   /** @type {HTMLInputElement | null} */
@@ -62,7 +70,7 @@
   /** Block item activation from the right-click pointerup that opened the menu */
   let suppressMenuSelect = $state(false)
 
-  /** Anchor for portaled menu — coords adjusted when #app uses CSS zoom */
+  /** Anchor for portaled context menu (body portal) */
   const contextMenuAnchor = {
     getBoundingClientRect() {
       const p = contextMenuPointer
@@ -78,6 +86,12 @@
   }
 
   const menuColName = $derived(columns[contextColIdx]?.name ?? 'cell')
+  const menuForeignKey = $derived(
+    menuColName ? findForeignKeyForColumn(foreignKeys, menuColName) : null,
+  )
+  const menuForeignKeyLabel = $derived(
+    menuForeignKey ? foreignKeyTargetLabel(menuForeignKey) : '',
+  )
   const menuEditable = $derived(canEditColumn(contextColIdx))
   const menuCellNull = $derived(
     rows[contextRowIdx]?.[contextColIdx] === null ||
@@ -93,6 +107,23 @@
   function focusRow(rowIdx) {
     if (editingCell) return
     focusedRow = rowIdx
+  }
+
+  /** @param {number} rowIdx @param {number} colIdx */
+  function foreignKeyForCell(rowIdx, colIdx) {
+    const col = columns[colIdx]
+    if (!col) return null
+    return findForeignKeyForColumn(foreignKeys, col.name)
+  }
+
+  /** @param {number} rowIdx @param {number} colIdx @param {MouseEvent} [e] */
+  function tryFollowForeignKey(rowIdx, colIdx, e) {
+    if (!foreignKeyForCell(rowIdx, colIdx)) return false
+    if (e && !(e.metaKey || e.ctrlKey || e.altKey)) return false
+    e.preventDefault()
+    e.stopPropagation()
+    onfollowforeignkey({ rowIdx, colIdx })
+    return true
   }
 
   function openInInspector(rowIdx) {
@@ -354,7 +385,7 @@
           class="app-scroll relative min-h-0 flex-1 overflow-auto bg-panel"
           oncontextmenucapture={prepareContextMenu}
         >
-          <table class="w-max min-w-full border-collapse text-[12px]">
+          <table class="w-max min-w-full border-collapse text-ui-sm">
             <thead class="sticky top-0 z-10 bg-panel">
               <tr class="border-b border-border">
                 <th class="w-9 px-2 py-1.5 text-left font-normal">
@@ -373,10 +404,10 @@
                   >
                     <div class="flex items-start gap-2">
                       <div class="flex flex-col gap-0.5">
-                        <span class="font-mono text-[12px] text-foreground" data-font="mono"
+                        <span class="font-mono text-ui-sm text-foreground" data-font="mono"
                           >{col.name}</span
                         >
-                        <span class="font-mono text-[10px] text-muted-foreground" data-font="mono"
+                        <span class="font-mono text-ui-2xs text-muted-foreground" data-font="mono"
                           >{col.dataType}</span
                         >
                       </div>
@@ -398,6 +429,13 @@
                       if (editingCell) cancelEdit()
                       focusRow(idx)
                     }}
+                    onauxclick={(e) => {
+                      if (e.button !== 1) return
+                      const cellEl = e.target instanceof Element ? e.target.closest('td[data-col-idx]') : null
+                      if (!cellEl) return
+                      const colIdx = Number(cellEl.getAttribute('data-col-idx')) || 0
+                      if (tryFollowForeignKey(idx, colIdx, e)) return
+                    }}
                     onfocus={() => {
                       if (contextMenuOpen || pendingContextMenu) return
                       focusRow(idx)
@@ -413,6 +451,7 @@
                       {@const isEditing =
                         editingCell?.rowIdx === idx && editingCell?.colIdx === colIdx}
                       {@const col = columns[colIdx]}
+                      {@const cellFk = foreignKeyForCell(idx, colIdx)}
                       <td
                         data-col-idx={colIdx}
                         class={cn(
@@ -421,10 +460,20 @@
                           isEditing
                             ? 'relative p-0 align-middle ring-2 ring-inset ring-primary bg-background'
                             : 'whitespace-nowrap px-3 py-1 text-muted-foreground',
+                          cellFk &&
+                            !isEditing &&
+                            'group/fk cursor-pointer bg-accent/15 ring-1 ring-inset ring-ring/50 transition-colors hover:bg-accent/25 hover:ring-ring/70',
                         )}
                         data-font="mono"
+                        onclick={(e) => {
+                          if (tryFollowForeignKey(idx, colIdx, e)) return
+                        }}
                         ondblclick={(e) => {
                           e.preventDefault()
+                          if (cellFk && (e.metaKey || e.ctrlKey)) {
+                            tryFollowForeignKey(idx, colIdx, e)
+                            return
+                          }
                           startEdit(idx, colIdx)
                         }}
                         onkeydown={(e) => {
@@ -441,13 +490,27 @@
                             bind:value={editingCell.draft}
                             disabled={saving}
                             aria-label="Edit {col?.name ?? 'cell'}"
-                            class="box-border block h-7 w-full min-w-0 max-w-full overflow-x-auto border-0 bg-transparent px-3 py-1 font-mono text-[12px] text-foreground outline-none [field-sizing:fixed] selection:bg-primary/20"
+                            class="box-border block h-7 w-full min-w-0 max-w-full overflow-x-auto border-0 bg-transparent px-3 py-1 font-mono text-ui-sm text-foreground outline-none [field-sizing:fixed] selection:bg-primary/20"
                             onclick={(e) => e.stopPropagation()}
                             onkeydown={handleEditKeydown}
                           />
                         {:else}
-                          <span class="block truncate" title={formatCell(cell)}>
-                            {formatCell(cell)}
+                          <span
+                            class={cn(
+                              'flex items-center gap-1.5 truncate',
+                              cellFk && 'text-foreground',
+                            )}
+                            title={cellFk
+                              ? `${formatCell(cell)} — ⌘-click to open ${foreignKeyTargetLabel(cellFk)}`
+                              : formatCell(cell)}
+                          >
+                            <span class="truncate">{formatCell(cell)}</span>
+                            {#if cellFk}
+                              <ExternalLink
+                                class="size-3 shrink-0 text-ring/80 transition-colors group-hover/fk:text-foreground"
+                                aria-hidden="true"
+                              />
+                            {/if}
                           </span>
                         {/if}
                       </td>
@@ -465,7 +528,7 @@
             >
               <div class="flex flex-col items-center gap-2 px-4 text-center">
                 <Table2 class="size-8 text-muted-foreground/25" />
-                <p class="text-[12px] text-muted-foreground">No rows in this table</p>
+                <p class="text-ui-sm text-muted-foreground">No rows in this table</p>
               </div>
             </div>
           {/if}
@@ -481,9 +544,9 @@
       sideOffset={4}
       onOpenAutoFocus={(e) => e.preventDefault()}
       class={cn(
-        'w-max min-w-32 p-0.5 text-[11px]',
-        '[&_[data-slot=context-menu-item]]:gap-1.5 [&_[data-slot=context-menu-item]]:px-2 [&_[data-slot=context-menu-item]]:py-1 [&_[data-slot=context-menu-item]]:text-[11px]',
-        '[&_[data-slot=context-menu-shortcut]]:text-[10px]',
+        'w-max min-w-32 p-0.5 text-ui-xs',
+        '[&_[data-slot=context-menu-item]]:gap-1.5 [&_[data-slot=context-menu-item]]:px-2 [&_[data-slot=context-menu-item]]:py-1 [&_[data-slot=context-menu-item]]:text-ui-xs',
+        '[&_[data-slot=context-menu-shortcut]]:text-ui-2xs',
         '[&_[data-slot=context-menu-item]_svg]:size-3.5',
       )}
     >
@@ -491,6 +554,16 @@
         <PanelRight />
         Open
       </ContextMenu.Item>
+      {#if menuForeignKey}
+        <ContextMenu.Item
+          onSelect={() =>
+            runMenuAction(() => onfollowforeignkey({ rowIdx: contextRowIdx, colIdx: contextColIdx }))}
+        >
+          <ExternalLink />
+          Open {menuForeignKeyLabel}
+          <ContextMenu.Shortcut>⌘↵</ContextMenu.Shortcut>
+        </ContextMenu.Item>
+      {/if}
       <ContextMenu.Separator />
       <ContextMenu.Item
         disabled={!menuEditable}

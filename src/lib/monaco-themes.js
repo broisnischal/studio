@@ -2,6 +2,37 @@ import * as monaco from 'monaco-editor'
 
 let defined = false
 
+/** Editor chrome colors (hex) — kept in sync with app.css surfaces. */
+const light = {
+  background: '#fafafa',
+  foreground: '#1a1a1a',
+  lineNumber: '#9ca3af',
+  lineNumberActive: '#4b5563',
+  lineHighlight: '#f3f4f6',
+  selection: '#bfdbfe99',
+  selectionInactive: '#dbeafe66',
+  cursor: '#171717',
+  widgetBg: '#ffffff',
+  widgetBorder: '#e5e7eb',
+  indent: '#e5e7eb',
+  indentActive: '#d1d5db',
+}
+
+const dark = {
+  background: '#1c1c1c',
+  foreground: '#ebebeb',
+  lineNumber: '#6b7280',
+  lineNumberActive: '#9ca3af',
+  lineHighlight: '#262626',
+  selection: '#3b4a5c99',
+  selectionInactive: '#3b4a5c44',
+  cursor: '#f5f5f5',
+  widgetBg: '#232323',
+  widgetBorder: '#363636',
+  indent: '#2e2e2e',
+  indentActive: '#454545',
+}
+
 /** Register light/dark editor themes aligned with app panel colors. */
 export function defineDbStudioMonacoThemes() {
   if (defined) return
@@ -11,24 +42,33 @@ export function defineDbStudioMonacoThemes() {
     base: 'vs',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '8b8b8b', fontStyle: 'italic' },
-      { token: 'string', foreground: '0d7d4d' },
-      { token: 'number', foreground: '0b5cad' },
-      { token: 'keyword', foreground: '5b21b6' },
+      { token: 'comment', foreground: '6b7280', fontStyle: 'italic' },
+      { token: 'string', foreground: '047857' },
+      { token: 'string.sql', foreground: '047857' },
+      { token: 'number', foreground: '0369a1' },
+      { token: 'number.float', foreground: '0369a1' },
+      { token: 'keyword', foreground: '7c3aed' },
+      { token: 'keyword.sql', foreground: '7c3aed' },
+      { token: 'operator', foreground: '374151' },
+      { token: 'delimiter', foreground: '374151' },
+      { token: 'identifier', foreground: '1a1a1a' },
     ],
     colors: {
-      'editor.background': '#fafafa',
-      'editor.foreground': '#1a1a1a',
-      'editorLineNumber.foreground': '#a3a3a3',
-      'editorLineNumber.activeForeground': '#525252',
-      'editor.selectionBackground': '#d4d4d480',
-      'editor.inactiveSelectionBackground': '#d4d4d440',
-      'editor.lineHighlightBackground': '#f0f0f0',
-      'editorCursor.foreground': '#1a1a1a',
-      'editorWidget.background': '#ffffff',
-      'editorWidget.border': '#e5e5e5',
-      'editorIndentGuide.background': '#e5e5e5',
-      'editorIndentGuide.activeBackground': '#d4d4d4',
+      'editor.background': light.background,
+      'editor.foreground': light.foreground,
+      'editorLineNumber.foreground': light.lineNumber,
+      'editorLineNumber.activeForeground': light.lineNumberActive,
+      'editor.selectionBackground': light.selection,
+      'editor.inactiveSelectionBackground': light.selectionInactive,
+      'editor.lineHighlightBackground': light.lineHighlight,
+      'editor.lineHighlightBorder': '#00000000',
+      'editorCursor.foreground': light.cursor,
+      'editorWidget.background': light.widgetBg,
+      'editorWidget.border': light.widgetBorder,
+      'editorIndentGuide.background': light.indent,
+      'editorIndentGuide.activeBackground': light.indentActive,
+      'editorBracketMatch.background': '#e5e7eb88',
+      'editorBracketMatch.border': '#9ca3af',
     },
   })
 
@@ -36,24 +76,33 @@ export function defineDbStudioMonacoThemes() {
     base: 'vs-dark',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '737373', fontStyle: 'italic' },
+      { token: 'comment', foreground: '6b7280', fontStyle: 'italic' },
       { token: 'string', foreground: '7ee787' },
+      { token: 'string.sql', foreground: '7ee787' },
       { token: 'number', foreground: '79c0ff' },
-      { token: 'keyword', foreground: 'd2a8ff' },
+      { token: 'number.float', foreground: '79c0ff' },
+      { token: 'keyword', foreground: 'c4b5fd' },
+      { token: 'keyword.sql', foreground: 'c4b5fd' },
+      { token: 'operator', foreground: 'd1d5db' },
+      { token: 'delimiter', foreground: '9ca3af' },
+      { token: 'identifier', foreground: 'ebebeb' },
     ],
     colors: {
-      'editor.background': '#141414',
-      'editor.foreground': '#e8e8e8',
-      'editorLineNumber.foreground': '#666666',
-      'editorLineNumber.activeForeground': '#a3a3a3',
-      'editor.selectionBackground': '#3a3a3a99',
-      'editor.inactiveSelectionBackground': '#3a3a3a55',
-      'editor.lineHighlightBackground': '#1c1c1c',
-      'editorCursor.foreground': '#f5f5f5',
-      'editorWidget.background': '#1a1a1a',
-      'editorWidget.border': '#2e2e2e',
-      'editorIndentGuide.background': '#2a2a2a',
-      'editorIndentGuide.activeBackground': '#404040',
+      'editor.background': dark.background,
+      'editor.foreground': dark.foreground,
+      'editorLineNumber.foreground': dark.lineNumber,
+      'editorLineNumber.activeForeground': dark.lineNumberActive,
+      'editor.selectionBackground': dark.selection,
+      'editor.inactiveSelectionBackground': dark.selectionInactive,
+      'editor.lineHighlightBackground': dark.lineHighlight,
+      'editor.lineHighlightBorder': '#00000000',
+      'editorCursor.foreground': dark.cursor,
+      'editorWidget.background': dark.widgetBg,
+      'editorWidget.border': dark.widgetBorder,
+      'editorIndentGuide.background': dark.indent,
+      'editorIndentGuide.activeBackground': dark.indentActive,
+      'editorBracketMatch.background': '#40404088',
+      'editorBracketMatch.border': '#6b7280',
     },
   })
 }
@@ -61,4 +110,18 @@ export function defineDbStudioMonacoThemes() {
 /** @param {'light' | 'dark'} theme */
 export function monacoThemeId(theme) {
   return theme === 'light' ? 'db-studio-light' : 'db-studio-dark'
+}
+
+/** Read editor font metrics from CSS (falls back to 16 / 26). */
+export function readEditorFontOptions() {
+  if (typeof document === 'undefined') {
+    return { fontSize: 16, lineHeight: 26 }
+  }
+  const root = document.documentElement
+  const size = parseFloat(getComputedStyle(root).getPropertyValue('--editor-font-size'))
+  const line = parseFloat(getComputedStyle(root).getPropertyValue('--editor-line-height'))
+  return {
+    fontSize: Number.isFinite(size) && size >= 12 ? size : 16,
+    lineHeight: Number.isFinite(line) && line >= 16 ? line : 26,
+  }
 }

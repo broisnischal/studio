@@ -135,9 +135,9 @@
           <Database class="size-4 text-muted-foreground" />
         </div>
         <div class="flex min-w-0 flex-col gap-1">
-          <Dialog.Title class="text-base font-semibold">Connect to PostgreSQL</Dialog.Title>
+          <Dialog.Title class="text-base font-semibold">Connect</Dialog.Title>
           <Dialog.Description class="text-sm text-muted-foreground">
-            Add a database connection to explore schemas and tables.
+            I hate using beekeeper, and pay tablepro.
           </Dialog.Description>
         </div>
       </div>
@@ -146,8 +146,18 @@
     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
       <Tabs.Root bind:value={tab} class="flex w-full flex-col gap-4">
         <Tabs.List class="grid h-9 w-full shrink-0 grid-cols-2">
-          <Tabs.Trigger value="new">New connection</Tabs.Trigger>
-          <Tabs.Trigger value="saved">Saved ({saved.length})</Tabs.Trigger>
+          <Tabs.Trigger
+            value="new"
+            class={tab === 'new' ? 'bg-accent text-accent-foreground' : ''}
+          >
+            New connection
+          </Tabs.Trigger>
+          <Tabs.Trigger
+            value="saved"
+            class={tab === 'saved' ? 'bg-accent text-accent-foreground' : ''}
+          >
+            Saved ({saved.length})
+          </Tabs.Trigger>
         </Tabs.List>
 
         <Tabs.Content value="saved" class="mt-0 flex flex-col gap-2">

@@ -35,6 +35,17 @@
     cloneSqlTabState,
   } from '$lib/studio-tabs.js'
   import { normalizeTableRowCount } from '$lib/table-list.js'
+  import {
+    DEFAULT_PAGE_SIZE,
+    filtersApiSignature,
+    filtersForApi,
+    sortForApi,
+  } from '$lib/table-query.js'
+  import {
+    buildForeignKeyFilters,
+    findForeignKeyForColumn,
+    normalizeForeignKeys,
+  } from '$lib/foreign-key-nav.js'
   import { loadLayout, saveLayout } from '$lib/stores/layout.js'
   import {
     remapNullableRowIndex,
@@ -44,8 +55,11 @@
   /** @typedef {import('$lib/studio-tabs.js').StudioTab} StudioTab */
   /** @typedef {import('$lib/studio-tabs.js').TableTabState} TableTabState */
   /** @typedef {import('$lib/studio-tabs.js').SqlTabState} SqlTabState */
+  /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
+  /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
+  /** @typedef {import('$lib/foreign-key-nav.js').ForeignKeyInfo} ForeignKeyInfo */
 
-  const pageSize = 50
+  const SEARCH_DEBOUNCE_MS = 300
 
   let connection = $state(null)
   let showConnectionModal = $state(true)
@@ -66,6 +80,8 @@
 
   let columns = $state([])
   let primaryKey = $state([])
+  /** @type {ForeignKeyInfo[]} */
+  let foreignKeys = $state([])
   let rows = $state([])
   let savingCell = $state(false)
   let deletingRows = $state(false)
@@ -75,6 +91,16 @@
   let queryMs = $state(0)
   let loadingRows = $state(false)
   let page = $state(1)
+  let pageSize = $state(DEFAULT_PAGE_SIZE)
+  let rowSearch = $state('')
+  let rowSort = $state(/** @type {TableSort | null} */ (null))
+  let rowFilters = $state(/** @type {TableFilter[]} */ ([]))
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let searchDebounceTimer = null
+  /** @type {{ focusRowSearch?: () => void } | null} */
+  let tableToolbar = $state(null)
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let filterDebounceTimer = null
   let error = $state('')
   let selected = $state(new Set())
   /** @type {number | null} */
@@ -94,6 +120,25 @@
 
   const activeView = $derived(activeTab?.kind === 'sql' ? 'sql' : 'table')
 
+  const sqlSchemaHints = $derived.by(() => {
+    /** @type {Record<string, string[]>} */
+    const columnsByTable = {}
+    if (activeTable && columns.length) {
+      const cols = columns.map((c) => c.name)
+      columnsByTable[activeTable] = cols
+      columnsByTable[`${activeSchema}.${activeTable}`] = cols
+    }
+    if (sqlColumns.length) {
+      columnsByTable.__result__ = sqlColumns.map((c) => c.name)
+    }
+    return {
+      schemas: [...schemas],
+      activeSchema,
+      tables: tables.map((t) => t.name),
+      columnsByTable,
+    }
+  })
+
   const inspectorTarget = $derived.by(() => {
     if (activeTab?.kind !== 'table') return null
     if (inspectorRow !== null) {
@@ -112,8 +157,13 @@
       schema: activeSchema,
       table: activeTable,
       page,
+      pageSize,
+      rowSearch,
+      rowSort: rowSort ? { ...rowSort } : null,
+      rowFilters: rowFilters.map((f) => ({ ...f })),
       columns,
       primaryKey,
+      foreignKeys,
       rows,
       total,
       queryMs,
@@ -130,8 +180,13 @@
   /** @param {TableTabState} s */
   function applyTableSnapshot(s) {
     page = s.page
+    pageSize = s.pageSize ?? DEFAULT_PAGE_SIZE
+    rowSearch = s.rowSearch ?? ''
+    rowSort = s.rowSort ? { ...s.rowSort } : null
+    rowFilters = (s.rowFilters ?? []).map((f) => ({ ...f }))
     columns = s.columns
     primaryKey = s.primaryKey
+    foreignKeys = s.foreignKeys ?? []
     rows = s.rows
     total = s.total
     queryMs = s.queryMs
@@ -172,8 +227,13 @@
   function clearTableEditor() {
     activeTable = null
     page = 1
+    pageSize = DEFAULT_PAGE_SIZE
+    rowSearch = ''
+    rowSort = null
+    rowFilters = []
     columns = []
     primaryKey = []
+    foreignKeys = []
     rows = []
     total = 0
     queryMs = 0
@@ -228,6 +288,13 @@
   createHotkey('Mod+K', (e) => {
     e.preventDefault()
     commandOpen = true
+  })
+
+  createHotkey('Mod+F', (e) => {
+    if (commandOpen || showConnectionModal || showSettingsModal) return
+    if (activeTab?.kind !== 'table' || !activeTable) return
+    e.preventDefault()
+    tableToolbar?.focusRowSearch?.()
   })
 
   createHotkey('Mod+Enter', (e) => {
@@ -419,12 +486,25 @@
     }
   }
 
-  /** @param {string} schema @param {string} table */
-  async function openTableTab(schema, table) {
+  /**
+   * @param {string} schema
+   * @param {string} table
+   * @param {{ filters?: TableFilter[], resetQuery?: boolean }} [options]
+   */
+  async function openTableTab(schema, table, options = {}) {
+    const { filters = null, resetQuery = false } = options
     const existing = findTableTab(tabs, schema, table)
     if (existing) {
       await activateTab(existing.id)
-      if (activeTable === table && columns.length === 0) {
+      if (filters) {
+        if (resetQuery) {
+          rowSearch = ''
+          rowSort = null
+        }
+        rowFilters = filters.map((f) => ({ ...f }))
+        page = 1
+        await loadRows()
+      } else if (activeTable === table && columns.length === 0) {
         await loadRows()
       }
       return
@@ -435,8 +515,13 @@
     activeTabId = tab.id
     activeTable = table
     page = 1
+    pageSize = DEFAULT_PAGE_SIZE
+    rowSearch = ''
+    rowSort = null
+    rowFilters = filters ? filters.map((f) => ({ ...f })) : []
     columns = []
     primaryKey = []
+    foreignKeys = []
     rows = []
     total = 0
     queryMs = 0
@@ -450,6 +535,25 @@
       await loadTables()
     }
     await loadRows()
+  }
+
+  /** @param {{ rowIdx: number, colIdx: number }} detail */
+  async function handleFollowForeignKey({ rowIdx, colIdx }) {
+    const col = columns[colIdx]
+    if (!col) return
+    const fk = findForeignKeyForColumn(foreignKeys, col.name)
+    if (!fk) return
+    const row = rows[rowIdx]
+    if (!row) return
+    const filters = buildForeignKeyFilters(fk, columns, row)
+    if (!filters) {
+      toast.error('Cannot open reference', {
+        description: 'Foreign key value is NULL or incomplete.',
+      })
+      return
+    }
+    const refSchema = fk.referencedSchema || activeSchema
+    await openTableTab(refSchema, fk.referencedTable, { filters, resetQuery: true })
   }
 
   async function loadSchemas() {
@@ -490,6 +594,56 @@
     }
   }
 
+  async function reloadTableFromQuery(resetPage = true) {
+    if (resetPage) page = 1
+    await loadRows()
+  }
+
+  /** @param {string} value */
+  function handleRowSearchChange(value) {
+    rowSearch = value
+    page = 1
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null
+      void loadRows()
+    }, SEARCH_DEBOUNCE_MS)
+  }
+
+  /** @param {TableFilter[]} filters */
+  function handleRowFiltersChange(filters) {
+    const prevSig = filtersApiSignature(rowFilters)
+    rowFilters = filters
+    const nextSig = filtersApiSignature(filters)
+    if (prevSig === nextSig) return
+
+    page = 1
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+    filterDebounceTimer = setTimeout(() => {
+      filterDebounceTimer = null
+      void loadRows()
+    }, SEARCH_DEBOUNCE_MS)
+  }
+
+  /** @param {TableSort | null} sort */
+  async function handleRowSortChange(sort) {
+    rowSort = sort
+    await reloadTableFromQuery(true)
+  }
+
+  /** @param {number} size */
+  async function handlePageSizeChange(size) {
+    if (!Number.isFinite(size) || size <= 0) return
+    pageSize = size
+    await reloadTableFromQuery(true)
+  }
+
+  /** @param {number} nextPage */
+  async function handlePageChange(nextPage) {
+    page = nextPage
+    await loadRows()
+  }
+
   async function loadRows() {
     if (!activeTable) {
       columns = []
@@ -505,15 +659,40 @@
     error = ''
     try {
       const offset = (page - 1) * pageSize
-      const data = await getTableRows(activeSchema, activeTable, pageSize, offset)
+      const { sortColumn, sortDirection } = sortForApi(rowSort)
+      const data = await getTableRows(activeSchema, activeTable, pageSize, offset, {
+        search: rowSearch,
+        sortColumn,
+        sortDirection,
+        filters: filtersForApi(rowFilters),
+      })
       columns = data.columns ?? []
       primaryKey = data.primaryKey ?? data.primary_key ?? []
+      foreignKeys = normalizeForeignKeys(data.foreignKeys ?? data.foreign_keys)
       rows = data.rows ?? []
       total = Number(data.total ?? 0)
       queryMs = Number(data.queryMs ?? data.query_ms ?? 0)
+      const maxPage = Math.max(1, Math.ceil(total / pageSize) || 1)
+      if (page > maxPage) {
+        page = maxPage
+        saveActiveTabState()
+        if (total > 0 && activeTable) {
+          const offset = (page - 1) * pageSize
+          const { sortColumn, sortDirection } = sortForApi(rowSort)
+          const retry = await getTableRows(activeSchema, activeTable, pageSize, offset, {
+            search: rowSearch,
+            sortColumn,
+            sortDirection,
+            filters: filtersForApi(rowFilters),
+          })
+          rows = retry.rows ?? []
+        }
+      }
     } catch (e) {
       error = String(e)
       columns = []
+      primaryKey = []
+      foreignKeys = []
       rows = []
       total = 0
     } finally {
@@ -804,12 +983,12 @@
         </div>
         <div class="flex flex-col gap-1">
           <h1 class="text-base font-medium">DB Studio</h1>
-          <p class="max-w-sm text-[13px] text-muted-foreground">
+          <p class="max-w-sm text-ui text-muted-foreground">
             Connect to PostgreSQL to browse schemas and table data.
           </p>
         </div>
         <Button type="button" onclick={() => (showConnectionModal = true)}>Add connection</Button>
-        <p class="text-[11px] text-muted-foreground">
+        <p class="text-ui-xs text-muted-foreground">
           <kbd class="rounded border border-border px-1 font-mono">⌘K</kbd> command menu
         </p>
       </div>
@@ -831,6 +1010,7 @@
           message={sqlMessage}
           loading={sqlLoading}
           error={sqlError}
+          schemaHints={sqlSchemaHints}
           onrun={runSql}
           onmodk={() => {
             commandOpen = true
@@ -841,38 +1021,48 @@
       {:else if activeTab?.kind === 'table'}
         {#if error}
           <Alert.Root variant="destructive" class="mx-3 mt-2 shrink-0">
-            <Alert.Description class="text-[12px]">{error}</Alert.Description>
+            <Alert.Description class="text-ui-sm">{error}</Alert.Description>
           </Alert.Root>
         {/if}
 
         {#if !activeTable}
           <div class="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-            <p class="font-mono text-[13px] text-muted-foreground">
+            <p class="font-mono text-ui text-muted-foreground">
               Select a table from the sidebar or press
-              <kbd class="rounded border border-border px-1 font-mono text-[11px]">⌘K</kbd>
+              <kbd class="rounded border border-border px-1 font-mono text-ui-xs">⌘K</kbd>
             </p>
           </div>
         {:else}
           <TableToolbar
+            bind:this={tableToolbar}
             {sidebarOpen}
             {queryMs}
             {page}
             {pageSize}
             {total}
+            {columns}
+            {rowSearch}
+            {rowSort}
+            {rowFilters}
             loading={loadingRows}
             selectedCount={selected.size}
             hasPrimaryKey={primaryKey.length > 0}
             deleting={deletingRows}
             ontogglesidebar={toggleSidebar}
             onrefresh={loadRows}
+            onsearchchange={handleRowSearchChange}
+            onfilterschange={(f) => void handleRowFiltersChange(f)}
+            onsortchange={(s) => void handleRowSortChange(s)}
+            onpagesizechange={(s) => void handlePageSizeChange(s)}
+            onpagechange={(p) => void handlePageChange(p)}
             ondeleteselected={() => void deleteSelectedRows()}
             onprev={async () => {
-              page -= 1
-              await loadRows()
+              if (page <= 1) return
+              await handlePageChange(page - 1)
             }}
             onnext={async () => {
-              page += 1
-              await loadRows()
+              if (page * pageSize >= total) return
+              await handlePageChange(page + 1)
             }}
           />
 
@@ -881,6 +1071,7 @@
               {columns}
               {rows}
               {primaryKey}
+              {foreignKeys}
               loading={loadingRows}
               saving={savingCell || deletingRows}
               bind:selected
@@ -889,6 +1080,7 @@
               bind:editingCell
               onsave={handleSaveCell}
               ondelete={handleDeleteRow}
+              onfollowforeignkey={(d) => void handleFollowForeignKey(d)}
             />
             <RowDetailPanel
               {columns}
@@ -900,12 +1092,12 @@
         {/if}
       {:else}
         <div class="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-          <p class="font-mono text-[13px] text-muted-foreground">
+          <p class="font-mono text-ui text-muted-foreground">
             Pick a table from the sidebar, open SQL from the sidebar, or press
-            <kbd class="rounded border border-border px-1 font-mono text-[11px]">⌘T</kbd>
+            <kbd class="rounded border border-border px-1 font-mono text-ui-xs">⌘T</kbd>
             for a new tab
           </p>
-          <p class="text-[11px] text-muted-foreground">
+          <p class="text-ui-xs text-muted-foreground">
             <kbd class="rounded border border-border px-1 font-mono">⌘B</kbd> sidebar ·
             <kbd class="rounded border border-border px-1 font-mono">⌘⇧D</kbd> data ·
             <kbd class="rounded border border-border px-1 font-mono">⌘⇧S</kbd> SQL ·

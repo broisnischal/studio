@@ -71,10 +71,25 @@ export async function listTables(schema) {
  * @param {string} table
  * @param {number} limit
  * @param {number} offset
+ * @param {{
+ *   search?: string
+ *   sortColumn?: string
+ *   sortDirection?: 'asc' | 'desc'
+ *   filters?: { column: string, op: string, value?: string }[]
+ * }} [query]
  */
-export async function getTableRows(schema, table, limit, offset) {
+export async function getTableRows(schema, table, limit, offset, query = {}) {
   try {
-    return await invoke('pg_get_table_rows', { schema, table, limit, offset })
+    return await invoke('pg_get_table_rows', {
+      schema,
+      table,
+      limit,
+      offset,
+      search: query.search?.trim() || null,
+      sortColumn: query.sortColumn || null,
+      sortDirection: query.sortDirection || null,
+      filters: query.filters?.length ? query.filters : null,
+    })
   } catch (err) {
     throw new Error(formatInvokeError(err))
   }

@@ -46,8 +46,23 @@ pub async fn pg_get_table_rows(
     table: String,
     limit: i64,
     offset: i64,
+    search: Option<String>,
+    sort_column: Option<String>,
+    sort_direction: Option<String>,
+    filters: Option<Vec<crate::db::RowFilter>>,
 ) -> Result<TableRows, String> {
-    get_table_rows(state, schema, table, limit, offset).await
+    get_table_rows(
+        state,
+        schema,
+        table,
+        limit,
+        offset,
+        search,
+        sort_column,
+        sort_direction,
+        filters,
+    )
+    .await
 }
 
 #[tauri::command]

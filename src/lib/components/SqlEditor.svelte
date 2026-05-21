@@ -3,13 +3,22 @@
   import * as monaco from 'monaco-editor'
   import { configureMonacoWorkers } from '$lib/monaco-env.js'
   import { registerMonacoSqlFormatter } from '$lib/format-sql.js'
-  import { defineDbStudioMonacoThemes, monacoThemeId } from '$lib/monaco-themes.js'
+  import { registerMonacoSqlCompletion } from '$lib/monaco-sql-complete.js'
+  import {
+    defineDbStudioMonacoThemes,
+    monacoThemeId,
+    readEditorFontOptions,
+  } from '$lib/monaco-themes.js'
   import { mode } from 'mode-watcher'
+  import { cn } from '$lib/utils.js'
+
+  /** @typedef {import('$lib/monaco-sql-complete.js').SqlSchemaHints} SqlSchemaHints */
 
   let {
     value = $bindable(''),
     class: className = '',
     readOnly = false,
+    schemaHints = /** @type {SqlSchemaHints} */ ({}),
     onmodk = undefined,
     onmodenter = undefined,
     onmods = undefined,
@@ -43,7 +52,10 @@
     configureMonacoWorkers()
     defineDbStudioMonacoThemes()
     registerMonacoSqlFormatter(monaco)
+    registerMonacoSqlCompletion(monaco, () => schemaHints)
     if (!container) return
+
+    const { fontSize, lineHeight } = readEditorFontOptions()
 
     editor = monaco.editor.create(container, {
       value,
@@ -51,15 +63,31 @@
       theme: monacoThemeId(appTheme),
       automaticLayout: true,
       minimap: { enabled: false },
-      fontFamily: 'var(--font-mono)',
-      fontSize: 13,
-      lineHeight: 20,
-      padding: { top: 12, bottom: 12 },
+      fontFamily: '"Geist Mono Variable", ui-monospace, monospace',
+      fontSize,
+      lineHeight,
+      fontLigatures: false,
+      fontWeight: 'normal',
+      padding: { top: 14, bottom: 14 },
       scrollBeyondLastLine: false,
       wordWrap: 'on',
       readOnly,
       renderLineHighlight: 'line',
-      scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+      lineNumbers: 'on',
+      lineNumbersMinChars: 3,
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+      cursorBlinking: 'smooth',
+      smoothScrolling: true,
+      quickSuggestions: {
+        other: true,
+        comments: false,
+        strings: true,
+      },
+      suggestOnTriggerCharacters: true,
+      tabCompletion: 'on',
+      wordBasedSuggestions: 'off',
+      acceptSuggestionOnEnter: 'on',
+      snippetSuggestions: 'inline',
     })
 
     registerAppShortcuts(editor)
@@ -90,9 +118,31 @@
     if (!editor) return
     monaco.editor.setTheme(monacoThemeId(appTheme))
   })
+
+  $effect(() => {
+    if (!editor) return
+    const { fontSize, lineHeight } = readEditorFontOptions()
+    editor.updateOptions({ fontSize, lineHeight })
+  })
 </script>
 
 <div
   bind:this={container}
-  class="h-full min-h-0 w-full overflow-hidden rounded-md border border-border bg-panel {className}"
+  class={cn(
+    'sql-editor-host h-full min-h-0 w-full overflow-hidden rounded-lg border border-border',
+    className,
+  )}
 ></div>
+
+<style>
+  .sql-editor-host :global(.monaco-editor),
+  .sql-editor-host :global(.monaco-editor .margin),
+  .sql-editor-host :global(.monaco-editor-background) {
+    border-radius: inherit;
+  }
+
+  .sql-editor-host :global(.monaco-editor .view-lines),
+  .sql-editor-host :global(.monaco-editor .view-line) {
+    font-weight: 400 !important;
+  }
+</style>

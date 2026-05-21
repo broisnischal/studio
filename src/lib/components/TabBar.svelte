@@ -46,7 +46,7 @@
           aria-selected={active}
           title={tabDisplayTitle(tab)}
           class={cn(
-            'flex min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-[12px] transition-colors',
+            'flex min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-ui-sm transition-colors',
             active ? 'text-foreground' : 'text-muted-foreground',
           )}
           onclick={() => onselect(tab.id)}

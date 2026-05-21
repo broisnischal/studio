@@ -1,11 +1,20 @@
 /** @typedef {'table' | 'sql' | 'welcome'} StudioTabKind */
 
+/** @typedef {import('$lib/table-query.js').TableSort} TableSort */
+/** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
+/** @typedef {import('$lib/foreign-key-nav.js').ForeignKeyInfo} ForeignKeyInfo */
+
 /** @typedef {object} TableTabState
  * @property {string} schema
  * @property {string | null} table
  * @property {number} page
+ * @property {number} pageSize
+ * @property {string} rowSearch
+ * @property {TableSort | null} rowSort
+ * @property {TableFilter[]} rowFilters
  * @property {Array<{ name: string, dataType?: string }>} columns
  * @property {string[]} primaryKey
+ * @property {ForeignKeyInfo[]} foreignKeys
  * @property {unknown[][]} rows
  * @property {number} total
  * @property {number} queryMs
@@ -48,7 +57,15 @@ export function cloneTableTabState(state) {
     ...state,
     columns: [...state.columns],
     primaryKey: [...state.primaryKey],
+    foreignKeys: state.foreignKeys.map((fk) => ({
+      columns: [...fk.columns],
+      referencedColumns: [...(fk.referencedColumns ?? fk.referenced_columns ?? [])],
+      referencedSchema: fk.referencedSchema ?? fk.referenced_schema ?? '',
+      referencedTable: fk.referencedTable ?? fk.referenced_table ?? '',
+    })),
     rows: state.rows.map((r) => [...r]),
+    rowFilters: state.rowFilters.map((f) => ({ ...f })),
+    rowSort: state.rowSort ? { ...state.rowSort } : null,
     selected: new Set(state.selected),
     editingCell: state.editingCell ? { ...state.editingCell } : null,
   }
@@ -69,8 +86,13 @@ export function createTableTabState(schema = 'public', table = null) {
     schema,
     table,
     page: 1,
+    pageSize: 50,
+    rowSearch: '',
+    rowSort: null,
+    rowFilters: [],
     columns: [],
     primaryKey: [],
+    foreignKeys: [],
     rows: [],
     total: 0,
     queryMs: 0,

@@ -115,10 +115,10 @@
     >
       <header class="flex shrink-0 items-start gap-2 border-b border-sidebar-border px-3 py-2.5">
         <div class="min-w-0 flex-1">
-          <p class="truncate font-mono text-[12px] font-medium text-foreground">{meta.title}</p>
-          <p class="truncate font-mono text-[10px] text-muted-foreground">{meta.subtitle}</p>
+          <p class="truncate font-mono text-ui-sm font-medium text-foreground">{meta.title}</p>
+          <p class="truncate font-mono text-ui-2xs text-muted-foreground">{meta.subtitle}</p>
           {#if meta.badge}
-            <p class="mt-0.5 font-mono text-[10px] text-muted-foreground">{meta.badge}</p>
+            <p class="mt-0.5 font-mono text-ui-2xs text-muted-foreground">{meta.badge}</p>
           {/if}
         </div>
         <button
@@ -141,8 +141,8 @@
 
       <Tabs.Root bind:value={viewMode} class="flex min-h-0 flex-1 flex-col">
         <Tabs.List class="mx-2 mt-2 h-8 w-auto shrink-0">
-          <Tabs.Trigger value="normal" class="px-3 text-[11px]">Normal</Tabs.Trigger>
-          <Tabs.Trigger value="json" class="px-3 text-[11px]">JSON</Tabs.Trigger>
+          <Tabs.Trigger value="normal" class="px-3 text-ui-xs">Normal</Tabs.Trigger>
+          <Tabs.Trigger value="json" class="px-3 text-ui-xs">JSON</Tabs.Trigger>
         </Tabs.List>
 
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
