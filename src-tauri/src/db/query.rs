@@ -1,9 +1,12 @@
 use super::connection::{require_pool, DbState};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sqlx::{Column, Row, TypeInfo};
+use sqlx::{Column, Decode, Postgres, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use tauri::State;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,12 +60,29 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
         };
     }
 
+    macro_rules! try_get_string {
+        ($t:ty) => {
+            if let Ok(v) = row.try_get::<Option<$t>, _>(idx) {
+                return match v {
+                    Some(x) => json!(x.to_string()),
+                    None => Value::Null,
+                };
+            }
+        };
+    }
+
     try_get!(bool);
     try_get!(i16);
     try_get!(i32);
     try_get!(i64);
     try_get!(f32);
     try_get!(f64);
+    try_get_string!(Decimal);
+    try_get_string!(DateTime<Utc>);
+    try_get_string!(NaiveDateTime);
+    try_get_string!(NaiveDate);
+    try_get_string!(NaiveTime);
+    try_get_string!(Uuid);
     try_get!(String);
 
     if type_name == "JSON" || type_name == "JSONB" {
@@ -76,6 +96,16 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
             Some(bytes) => json!(format!("[{} bytes]", bytes.len())),
             None => Value::Null,
         };
+    }
+
+    // PostgreSQL enums and other text-compatible custom types (wire format is UTF-8).
+    if let Ok(raw) = row.try_get_raw(idx) {
+        if raw.is_null() {
+            return Value::Null;
+        }
+        if let Ok(text) = <String as Decode<Postgres>>::decode(raw) {
+            return json!(text);
+        }
     }
 
     Value::String(format!("<{type_name}>"))
@@ -315,6 +345,141 @@ pub async fn update_table_cell(
         .map_err(|e| format!("Update failed: {e}"))?;
 
     Ok(())
+}
+
+pub async fn delete_table_row(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_key: HashMap<String, Value>,
+) -> Result<(), String> {
+    let deleted = delete_table_rows(state, schema, table, vec![primary_key]).await?;
+    if deleted == 0 {
+        return Err("No row deleted (row may have changed)".into());
+    }
+    Ok(())
+}
+
+pub async fn delete_table_rows(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_keys: Vec<HashMap<String, Value>>,
+) -> Result<u64, String> {
+    let pool = require_pool(&state)?;
+
+    if primary_keys.is_empty() {
+        return Ok(0);
+    }
+
+    let pk_columns = fetch_primary_key(&pool, &schema, &table).await?;
+    if pk_columns.is_empty() {
+        return Err("Cannot delete rows: table has no primary key".into());
+    }
+
+    for (i, primary_key) in primary_keys.iter().enumerate() {
+        if primary_key.is_empty() {
+            return Err(format!("Row {i} has empty primary key"));
+        }
+        for pk_col in &pk_columns {
+            if !primary_key.contains_key(pk_col) {
+                return Err(format!("Row {i} is missing primary key column: {pk_col}"));
+            }
+        }
+    }
+
+    let meta_rows = sqlx::query(
+        r#"
+        SELECT column_name::text, data_type::text
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        "#,
+    )
+    .bind(&schema)
+    .bind(&table)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load column metadata: {e}"))?;
+
+    let mut column_types: HashMap<String, String> = HashMap::new();
+    for row in &meta_rows {
+        if let (Ok(name), Ok(dt)) = (
+            row.try_get::<String, _>(0),
+            row.try_get::<String, _>(1),
+        ) {
+            column_types.insert(name, dt);
+        }
+    }
+
+    let sql = if pk_columns.len() == 1 {
+        let pk_col = &pk_columns[0];
+        let placeholders: Vec<String> = (1..=primary_keys.len()).map(|i| format!("${i}")).collect();
+        format!(
+            r#"DELETE FROM "{schema}"."{table}" WHERE "{pk_col}" IN ({})"#,
+            placeholders.join(", ")
+        )
+    } else {
+        let quoted_cols: Vec<String> = pk_columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect();
+        let value_rows: Vec<String> = primary_keys
+            .iter()
+            .enumerate()
+            .map(|(row_i, _)| {
+                let start = row_i * pk_columns.len() + 1;
+                let placeholders: Vec<String> = (0..pk_columns.len())
+                    .map(|j| format!("${}", start + j))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+        let match_cols: Vec<String> = pk_columns
+            .iter()
+            .map(|c| format!(r#"t."{c}" = v."{c}""#))
+            .collect();
+        format!(
+            r#"DELETE FROM "{schema}"."{table}" AS t
+USING (VALUES {value_rows}) AS v({quoted_cols})
+WHERE {match_cols}"#,
+            value_rows = value_rows.join(", "),
+            quoted_cols = quoted_cols.join(", "),
+            match_cols = match_cols.join(" AND ")
+        )
+    };
+
+    let mut q = sqlx::query(&sql);
+    if pk_columns.len() == 1 {
+        let pk_col = &pk_columns[0];
+        let pk_type = column_types
+            .get(pk_col)
+            .ok_or_else(|| format!("Missing PK metadata: {pk_col}"))?;
+        for primary_key in &primary_keys {
+            let pk_val = primary_key
+                .get(pk_col)
+                .ok_or_else(|| format!("Missing primary key: {pk_col}"))?;
+            q = bind_typed_value(q, pk_type, pk_val)?;
+        }
+    } else {
+        for primary_key in &primary_keys {
+            for pk_col in &pk_columns {
+                let pk_val = primary_key
+                    .get(pk_col)
+                    .ok_or_else(|| format!("Missing primary key: {pk_col}"))?;
+                let pk_type = column_types
+                    .get(pk_col)
+                    .ok_or_else(|| format!("Missing PK metadata: {pk_col}"))?;
+                q = bind_typed_value(q, pk_type, pk_val)?;
+            }
+        }
+    }
+
+    let result = q
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Delete failed: {e}"))?;
+
+    Ok(result.rows_affected())
 }
 
 fn bind_typed_value<'a>(

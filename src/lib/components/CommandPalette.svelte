@@ -7,6 +7,7 @@
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import CornerDownLeft from '@lucide/svelte/icons/corner-down-left'
   import * as Command from '$lib/components/ui/command/index.js'
+  import { formatTableRowCount } from '$lib/table-list.js'
 
   let {
     open = $bindable(false),
@@ -49,9 +50,7 @@
           >
             <Terminal class="size-4 opacity-60" />
             <span>SQL editor</span>
-            <Command.Shortcut>
-              <CornerDownLeft class="size-3 opacity-50" />
-            </Command.Shortcut>
+            <Command.Shortcut>⌘⇧S</Command.Shortcut>
           </Command.Item>
           <Command.Item
             value="open table data browser"
@@ -59,6 +58,7 @@
           >
             <Table2 class="size-4 opacity-60" />
             <span>Table data</span>
+            <Command.Shortcut>⌘⇧D</Command.Shortcut>
           </Command.Item>
         </Command.Group>
 
@@ -84,12 +84,13 @@
             {#each tables as table (table.name)}
               <Command.Item
                 value="table {activeSchema} {table.name}"
+                class="gap-2"
                 onSelect={() => run(() => ontableselect(table.name))}
               >
                 <Table2 class="size-4 opacity-60" />
-                <span class="font-mono">{table.name}</span>
-                <span class="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {table.rowCount}
+                <span class="min-w-0 truncate font-mono">{table.name}</span>
+                <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {formatTableRowCount(table.rowCount)}
                 </span>
               </Command.Item>
             {/each}

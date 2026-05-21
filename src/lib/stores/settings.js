@@ -90,6 +90,13 @@ function handleZoomKeydown(e) {
     e.preventDefault()
     e.stopPropagation()
     decreaseZoom()
+    return
+  }
+
+  if (key === 'm' || key === 'M' || code === 'KeyM') {
+    e.preventDefault()
+    e.stopPropagation()
+    toggleTheme()
   }
 }
 
@@ -137,6 +144,12 @@ export function decreaseZoom() {
 
 export function resetZoom() {
   return updateSettings({ zoom: DEFAULT_ZOOM })
+}
+
+export function toggleTheme() {
+  const current = loadSettings()
+  const theme = current.theme === 'dark' ? 'light' : 'dark'
+  return updateSettings({ theme })
 }
 
 export function canIncreaseZoom(zoom) {

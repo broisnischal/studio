@@ -10,7 +10,19 @@
   import Unplug from '@lucide/svelte/icons/unplug'
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js'
   import * as Select from '$lib/components/ui/select/index.js'
+  import ResizeHandle from './ResizeHandle.svelte'
+  import TableListSkeleton from './TableListSkeleton.svelte'
   import { cn } from '$lib/utils.js'
+  import { formatTableRowCount } from '$lib/table-list.js'
+  import {
+    clampNavSidebarWidth,
+    loadLayout,
+    saveLayout,
+  } from '$lib/stores/layout.js'
+
+  const initialLayout = loadLayout()
+  let width = $state(initialLayout.navSidebarWidth)
+  let resizeStartWidth = initialLayout.navSidebarWidth
 
   let {
     connectionName = '',
@@ -36,7 +48,8 @@
   )
 </script>
 
-<aside class="flex h-full w-[220px] shrink-0 flex-col bg-sidebar text-sidebar-foreground">
+<div class="flex h-full shrink-0" style:width="{width}px" data-studio-region="sidebar">
+  <aside class="flex h-full min-w-0 flex-1 flex-col bg-sidebar text-sidebar-foreground">
   <div class="flex min-h-0 flex-1 flex-col">
     {#if connectionName}
       <div class="flex gap-0.5 border-b border-sidebar-border px-1.5 py-1.5">
@@ -48,6 +61,7 @@
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
           )}
+          title="Data view (⌘⇧D)"
           onclick={() => onviewchange('table')}
         >
           <Table2 class="size-3" />
@@ -61,6 +75,7 @@
               ? 'bg-sidebar-accent text-sidebar-accent-foreground'
               : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
           )}
+          title="SQL editor (⌘⇧S)"
           onclick={() => onviewchange('sql')}
         >
           <Terminal class="size-3" />
@@ -119,7 +134,7 @@
       <button
         type="button"
         class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-        title="Refresh tables"
+        title="Refresh tables (⌘R)"
         disabled={loadingTables}
         onclick={onrefresh}
       >
@@ -139,23 +154,30 @@
       <p class="px-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
         Tables
       </p>
-      <ScrollArea class="min-h-0 flex-1">
-        <ul class="flex w-full flex-col gap-0.5 px-1.5 pb-2">
-          {#if loadingTables}
-            <li class="px-2 py-2 text-[12px] text-muted-foreground">Loading…</li>
-          {:else if tables.length === 0}
-            <li class="px-2 py-2 text-[12px] text-muted-foreground">
-              No tables in {activeSchema || 'schema'}
+      <ScrollArea class="min-h-0 w-full flex-1">
+        {#if loadingTables}
+          <TableListSkeleton />
+        {:else}
+        <ul class="flex w-full min-w-full flex-col gap-0.5 px-1.5 pb-2">
+          {#if tables.length === 0}
+            <li class="flex w-full flex-col items-center gap-2 px-4 py-10 text-center">
+              <Table2 class="size-7 text-muted-foreground/25" />
+              <p class="text-[12px] text-muted-foreground">
+                No tables in {activeSchema || 'schema'}
+              </p>
             </li>
           {:else if filteredTables.length === 0}
-            <li class="px-2 py-2 text-[12px] text-muted-foreground">No match</li>
+            <li class="flex w-full flex-col items-center gap-2 px-4 py-8 text-center">
+              <Search class="size-6 text-muted-foreground/25" />
+              <p class="text-[12px] text-muted-foreground">No tables match your search</p>
+            </li>
           {:else}
             {#each filteredTables as table (table.name)}
               <li>
                 <button
                   type="button"
                   class={cn(
-                    'grid w-full grid-cols-[14px_minmax(0,1fr)_2.75rem] items-center gap-x-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                    'flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
                     activeTable === table.name
                       ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                       : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground',
@@ -163,17 +185,18 @@
                   onclick={() => ontableselect(table.name)}
                 >
                   <Table2 class="size-3 shrink-0 opacity-50" />
-                  <span class="truncate font-mono text-[12px] leading-none">{table.name}</span>
+                  <span class="min-w-0 truncate font-mono text-[12px] leading-none">{table.name}</span>
                   <span
-                    class="text-right font-mono text-[11px] leading-none tabular-nums text-muted-foreground"
+                    class="shrink-0 font-mono text-[11px] leading-none tabular-nums text-muted-foreground"
                   >
-                    {table.rowCount}
+                    {formatTableRowCount(table.rowCount)}
                   </span>
                 </button>
               </li>
             {/each}
           {/if}
         </ul>
+        {/if}
       </ScrollArea>
     </div>
   </div>
@@ -212,4 +235,18 @@
       </button>
     {/if}
   </footer>
-</aside>
+  </aside>
+  <ResizeHandle
+    edge="end"
+    onresizestart={() => {
+      resizeStartWidth = width
+    }}
+    onresize={(dx) => {
+      width = clampNavSidebarWidth(resizeStartWidth + dx)
+    }}
+    onresizeend={() => {
+      resizeStartWidth = width
+      saveLayout({ navSidebarWidth: width })
+    }}
+  />
+</div>

@@ -51,7 +51,7 @@
         <div class="flex flex-col gap-1">
           <Dialog.Title class="text-base font-semibold">Settings</Dialog.Title>
           <Dialog.Description class="text-sm text-muted-foreground">
-            Theme and zoom. Use Ctrl + / Ctrl − to zoom anytime.
+            Theme and zoom. Ctrl + M toggles theme; Ctrl + / Ctrl − to zoom.
           </Dialog.Description>
         </div>
       </div>
@@ -115,7 +115,7 @@
           </Button>
         </div>
         <p class="text-xs text-muted-foreground">
-          Shortcuts: Ctrl + Plus, Ctrl + Minus, Ctrl + 0 to reset
+          Shortcuts: Ctrl + M theme; Ctrl + Plus, Ctrl + Minus, Ctrl + 0 zoom
         </p>
       </div>
     </div>

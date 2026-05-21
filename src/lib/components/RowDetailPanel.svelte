@@ -1,7 +1,10 @@
 <script>
   import X from '@lucide/svelte/icons/x'
+  import Copy from '@lucide/svelte/icons/copy'
   import ShikiBlock from './ShikiBlock.svelte'
+  import ResizeHandle from './ResizeHandle.svelte'
   import * as Tabs from '$lib/components/ui/tabs/index.js'
+  import { toast } from 'svelte-sonner'
   import {
     formatJsonValue,
     formatNormalValue,
@@ -10,6 +13,11 @@
     rowToRecord,
     rowsToJsonPayload,
   } from '$lib/row-inspector.js'
+  import {
+    clampInspectorWidth,
+    loadLayout,
+    saveLayout,
+  } from '$lib/stores/layout.js'
 
   /**
    * @typedef {{ kind: 'cell', rowIdx: number, colIdx: number } | { kind: 'row', rowIdx: number } | { kind: 'rows', rowIndices: number[] }} InspectorTarget
@@ -22,8 +30,11 @@
     onclose = () => {},
   } = $props()
 
+  const initialLayout = loadLayout()
+  let width = $state(initialLayout.inspectorWidth)
+  let resizeStartWidth = initialLayout.inspectorWidth
   /** @type {'normal' | 'json'} */
-  let viewMode = $state('normal')
+  let viewMode = $state(initialLayout.inspectorView)
 
   const meta = $derived.by(() => {
     if (!target || columns.length === 0) return null
@@ -67,39 +78,81 @@
     meta ? (viewMode === 'json' ? meta.jsonText : meta.normalText) : '',
   )
   const shikiLang = $derived(viewMode === 'json' ? 'json' : 'plaintext')
+
+  $effect(() => {
+    viewMode
+    saveLayout({ inspectorView: viewMode })
+  })
+
+  async function copyJson() {
+    if (!meta?.jsonText) return
+    try {
+      await navigator.clipboard.writeText(meta.jsonText)
+      toast.success('Copied JSON')
+    } catch {
+      toast.error('Could not copy to clipboard')
+    }
+  }
 </script>
 
 {#if target && meta}
-  <aside
-    class="flex h-full w-[300px] shrink-0 flex-col border-l border-border bg-sidebar text-sidebar-foreground"
-  >
-    <header class="flex shrink-0 items-start gap-2 border-b border-sidebar-border px-3 py-2.5">
-      <div class="min-w-0 flex-1">
-        <p class="truncate font-mono text-[12px] font-medium text-foreground">{meta.title}</p>
-        <p class="truncate font-mono text-[10px] text-muted-foreground">{meta.subtitle}</p>
-        {#if meta.badge}
-          <p class="mt-0.5 font-mono text-[10px] text-muted-foreground">{meta.badge}</p>
-        {/if}
-      </div>
-      <button
-        type="button"
-        class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Close panel"
-        onclick={onclose}
-      >
-        <X class="size-3.5" />
-      </button>
-    </header>
+  <div class="flex h-full shrink-0" style:width="{width}px">
+    <ResizeHandle
+      edge="start"
+      onresizestart={() => {
+        resizeStartWidth = width
+      }}
+      onresize={(dx) => {
+        width = clampInspectorWidth(resizeStartWidth + dx)
+      }}
+      onresizeend={() => {
+        resizeStartWidth = width
+        saveLayout({ inspectorWidth: width })
+      }}
+    />
+    <aside
+      class="flex h-full min-w-0 flex-1 flex-col border-l border-border bg-sidebar text-sidebar-foreground"
+    >
+      <header class="flex shrink-0 items-start gap-2 border-b border-sidebar-border px-3 py-2.5">
+        <div class="min-w-0 flex-1">
+          <p class="truncate font-mono text-[12px] font-medium text-foreground">{meta.title}</p>
+          <p class="truncate font-mono text-[10px] text-muted-foreground">{meta.subtitle}</p>
+          {#if meta.badge}
+            <p class="mt-0.5 font-mono text-[10px] text-muted-foreground">{meta.badge}</p>
+          {/if}
+        </div>
+        <button
+          type="button"
+          class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Copy JSON"
+          onclick={copyJson}
+        >
+          <Copy class="size-3.5" />
+        </button>
+        <button
+          type="button"
+          class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Close panel (Esc)"
+          onclick={onclose}
+        >
+          <X class="size-3.5" />
+        </button>
+      </header>
 
-    <Tabs.Root bind:value={viewMode} class="flex min-h-0 flex-1 flex-col">
-      <Tabs.List class="mx-2 mt-2 h-8 w-auto shrink-0">
-        <Tabs.Trigger value="normal" class="px-3 text-[11px]">Normal</Tabs.Trigger>
-        <Tabs.Trigger value="json" class="px-3 text-[11px]">JSON</Tabs.Trigger>
-      </Tabs.List>
+      <Tabs.Root bind:value={viewMode} class="flex min-h-0 flex-1 flex-col">
+        <Tabs.List class="mx-2 mt-2 h-8 w-auto shrink-0">
+          <Tabs.Trigger value="normal" class="px-3 text-[11px]">Normal</Tabs.Trigger>
+          <Tabs.Trigger value="json" class="px-3 text-[11px]">JSON</Tabs.Trigger>
+        </Tabs.List>
 
-      <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ShikiBlock code={displayCode} lang={shikiLang} />
-      </div>
-    </Tabs.Root>
-  </aside>
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ShikiBlock
+            code={displayCode}
+            lang={shikiLang}
+            jsonInteractive={viewMode === 'json'}
+          />
+        </div>
+      </Tabs.Root>
+    </aside>
+  </div>
 {/if}

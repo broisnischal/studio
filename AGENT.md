@@ -97,17 +97,25 @@ AGENT.md                     # this file
 | `pg_get_table_rows` | Paginated rows + column metadata |
 | `pg_execute_sql` | Run SQL in SQL editor (SELECT vs DML) |
 | `pg_update_table_cell` | Update one cell (requires primary key) |
+| `pg_delete_table_row` | Delete one row by primary key |
+| `pg_delete_table_rows` | Batch delete rows (`IN` or `VALUES` query) |
 
 ## Keyboard shortcuts
 
 | Shortcut | Action |
 |----------|--------|
 | `Mod+K` | Open command palette |
+| `Mod+B` | Toggle nav sidebar |
+| `Mod+Shift+D` | Data view (table tabs) |
+| `Mod+Shift+S` | SQL editor view |
+| `Mod+R` | Refresh tables (sidebar focus) or refresh rows / re-run SQL (main area) |
 | `Mod+Enter` | Run SQL (SQL view) |
-| `Mod+S` | Save inline cell edit (while editing) |
+| `Mod+S` | Format SQL (SQL view); save inline cell edit (table view) |
+| `Mod+Backspace` | Delete selected rows (table view) |
 | Double-click cell | Edit cell value |
 | `Enter` | Save edit (in cell input) |
-| `Escape` | Cancel edit |
+| `Escape` | Close command palette (⌘K), cancel cell edit, or close row inspector |
+| `Mod+M` | Toggle light / dark theme |
 | `Mod+=` / `Mod+-` / `Mod+0` | Zoom in / out / reset |
 
 `Mod` is Cmd on macOS and Ctrl on Windows/Linux ([TanStack Hotkeys](https://tanstack.com/hotkeys/latest/docs/installation#svelte)).
@@ -123,7 +131,7 @@ npm run dev          # Vite only — UI only, invokes will fail
 ## UI / display
 
 - **Fonts**: Geist Sans + Geist Mono via `@fontsource-variable/geist` (see `src/app.css`).
-- **Theme**: `light` | `dark` via `stores/settings.js` — toggles `html.dark` class.
+- **Theme**: `light` | `dark` via `stores/settings.js` — toggles `html.dark` class. **Ctrl/Cmd + M** to toggle.
 - **Zoom**: CSS `zoom` on `#app` (80%–150% steps). Settings gear icon or **Ctrl + Plus / Minus / 0**. Tauri `zoomHotkeysEnabled` is **off** (use app zoom, not webview zoom).
 - Default window: 1280×800 (`src-tauri/tauri.conf.json`).
 
@@ -136,7 +144,8 @@ npm run dev          # Vite only — UI only, invokes will fail
 | Paginated table viewer | Done |
 | Theme (light/dark) + font size settings | Done |
 | SQL console | Placeholder |
-| Add / edit / delete rows | Not started |
+| Add row | Not started |
+| Edit / delete rows | Table grid + batch delete via toolbar ⋯ menu (⌘⌫) |
 | Filter / sort UI | Placeholder |
 | MySQL / SQLite / etc. | Not started |
 

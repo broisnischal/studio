@@ -109,3 +109,37 @@ export async function updateTableCell(schema, table, primaryKey, column, value) 
     throw new Error(formatInvokeError(err))
   }
 }
+
+/**
+ * @param {string} schema
+ * @param {string} table
+ * @param {Record<string, unknown>} primaryKey
+ */
+export async function deleteTableRow(schema, table, primaryKey) {
+  try {
+    return await invoke('pg_delete_table_row', {
+      schema,
+      table,
+      primaryKey,
+    })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}
+
+/**
+ * @param {string} schema
+ * @param {string} table
+ * @param {Record<string, unknown>[]} primaryKeys
+ */
+export async function deleteTableRows(schema, table, primaryKeys) {
+  try {
+    return await invoke('pg_delete_table_rows', {
+      schema,
+      table,
+      primaryKeys,
+    })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}

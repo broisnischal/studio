@@ -2,6 +2,7 @@
   import Play from '@lucide/svelte/icons/play'
   import SqlEditor from './SqlEditor.svelte'
   import DataTable from './DataTable.svelte'
+  import DataTableSkeleton from './DataTableSkeleton.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
 
@@ -37,6 +38,8 @@
       Run
       <span class="font-mono text-[10px] text-muted-foreground">⌘↵</span>
     </Button>
+    <span class="font-mono text-[10px] text-muted-foreground">⌘R refresh</span>
+    <span class="font-mono text-[10px] text-muted-foreground">⌘S format</span>
     {#if queryMs > 0}
       <span class="font-mono text-[11px] tabular-nums text-muted-foreground">
         {queryMs}ms
@@ -67,7 +70,7 @@
     {#if columns.length > 0}
       <DataTable {columns} {rows} {loading} bind:selected />
     {:else if loading}
-      <p class="px-4 py-6 font-mono text-[12px] text-muted-foreground">Running query…</p>
+      <DataTableSkeleton columnCount={6} rowCount={10} />
     {:else}
       <p class="px-4 py-6 font-mono text-[12px] text-muted-foreground">
         Results appear here after you run a query.

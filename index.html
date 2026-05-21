@@ -9,6 +9,14 @@
       } catch (_) {
         document.documentElement.classList.add('dark')
       }
+      ;(function () {
+        var ua = navigator.userAgent || ''
+        var platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || ''
+        var os = 'linux'
+        if (/Win/i.test(platform) || /Windows/i.test(ua)) os = 'windows'
+        else if (/Mac/i.test(platform) || /Macintosh|Mac OS/i.test(ua)) os = 'macos'
+        document.documentElement.dataset.os = os
+      })()
     </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

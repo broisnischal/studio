@@ -8,18 +8,30 @@
   import Plus from '@lucide/svelte/icons/plus'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import MoreHorizontal from '@lucide/svelte/icons/more-horizontal'
+  import Trash2 from '@lucide/svelte/icons/trash-2'
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js'
   import { cn } from '$lib/utils.js'
 
   let {
+    sidebarOpen = true,
     queryMs = 0,
     page = 1,
     pageSize = 50,
     total = 0,
     loading = false,
+    selectedCount = 0,
+    hasPrimaryKey = false,
+    deleting = false,
+    ontogglesidebar = () => {},
     onrefresh = () => {},
     onprev = () => {},
     onnext = () => {},
+    ondeleteselected = () => {},
   } = $props()
+
+  const deleteLabel = $derived(
+    selectedCount === 1 ? 'Delete 1 row' : `Delete ${selectedCount} rows`,
+  )
 
   const from = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1)
   const to = $derived(Math.min(page * pageSize, total))
@@ -35,7 +47,13 @@
 >
   <!-- Left: view + navigation -->
   <div class="flex items-center gap-0.5">
-    <button type="button" class={iconBtn} title="Toggle sidebar" disabled>
+    <button
+      type="button"
+      class={cn(iconBtn, !sidebarOpen && 'bg-accent text-foreground')}
+      title="Toggle sidebar (⌘B)"
+      aria-pressed={sidebarOpen}
+      onclick={ontogglesidebar}
+    >
       <PanelLeft class="size-3.5" />
     </button>
     <span class="mx-0.5 h-4 w-px bg-border"></span>
@@ -97,12 +115,30 @@
       class={iconBtn}
       disabled={loading}
       onclick={onrefresh}
+      title="Refresh data (⌘R)"
       aria-label="Refresh data"
     >
       <RefreshCw class={cn('size-3.5', loading && 'animate-spin')} />
     </button>
-    <button type="button" class={iconBtn} title="More" disabled>
-      <MoreHorizontal class="size-3.5" />
-    </button>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        class={cn(iconBtn, selectedCount > 0 && 'text-foreground')}
+        title="More actions"
+        disabled={loading || deleting}
+      >
+        <MoreHorizontal class="size-3.5" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="w-44 text-[12px]">
+        <DropdownMenu.Item
+          variant="destructive"
+          disabled={selectedCount === 0 || !hasPrimaryKey || deleting}
+          onSelect={ondeleteselected}
+        >
+          <Trash2 />
+          {deleteLabel}
+          <DropdownMenu.Shortcut>⌘⌫</DropdownMenu.Shortcut>
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
   </div>
 </header>

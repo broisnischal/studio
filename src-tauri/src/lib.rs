@@ -26,6 +26,8 @@ pub fn run() {
             commands::pg_get_table_rows,
             commands::pg_execute_sql,
             commands::pg_update_table_cell,
+            commands::pg_delete_table_row,
+            commands::pg_delete_table_rows,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

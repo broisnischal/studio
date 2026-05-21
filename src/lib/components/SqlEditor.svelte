@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import * as monaco from 'monaco-editor'
   import { configureMonacoWorkers } from '$lib/monaco-env.js'
+  import { registerMonacoSqlFormatter } from '$lib/format-sql.js'
   import { defineDbStudioMonacoThemes, monacoThemeId } from '$lib/monaco-themes.js'
   import { mode } from 'mode-watcher'
 
@@ -32,12 +33,16 @@
 
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyK, () => run(onmodk))
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => run(onmodenter))
-    ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, () => run(onmods))
+    ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, async () => {
+      await ed.getAction('editor.action.formatDocument')?.run()
+      run(onmods)
+    })
   }
 
   onMount(() => {
     configureMonacoWorkers()
     defineDbStudioMonacoThemes()
+    registerMonacoSqlFormatter(monaco)
     if (!container) return
 
     editor = monaco.editor.create(container, {

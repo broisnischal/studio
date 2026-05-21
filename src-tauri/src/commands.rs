@@ -1,6 +1,7 @@
 use crate::db::{
-    connect, disconnect, execute_sql, get_table_rows, list_schemas, list_tables, test_connection,
-    update_table_cell, ConnectionConfig, SqlResult, TableInfo, TableRows,
+    connect, disconnect, delete_table_row, delete_table_rows, execute_sql, get_table_rows,
+    list_schemas, list_tables, test_connection, update_table_cell, ConnectionConfig, SqlResult,
+    TableInfo, TableRows,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -64,4 +65,24 @@ pub async fn pg_update_table_cell(
     value: Value,
 ) -> Result<(), String> {
     update_table_cell(state, schema, table, primary_key, column, value).await
+}
+
+#[tauri::command]
+pub async fn pg_delete_table_row(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_key: HashMap<String, Value>,
+) -> Result<(), String> {
+    delete_table_row(state, schema, table, primary_key).await
+}
+
+#[tauri::command]
+pub async fn pg_delete_table_rows(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_keys: Vec<HashMap<String, Value>>,
+) -> Result<u64, String> {
+    delete_table_rows(state, schema, table, primary_keys).await
 }
