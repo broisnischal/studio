@@ -156,6 +156,26 @@ Config: `components.json`. Requires `jsconfig.json` paths for `$lib`.
 4. Wire UI in `StudioShell` or a focused component under `src/lib/components/`.
 5. Use shadcn components; verify with `npm run build`.
 
+## Release builds (GitHub Actions)
+
+Workflow: `.github/workflows/release.yml`
+
+| Trigger | How |
+|---------|-----|
+| Tag push | `git tag v0.1.0 && git push origin v0.1.0` |
+| Manual | Actions → **Release** → Run workflow (set tag, e.g. `v0.1.0`) |
+
+Builds **Linux** (`.deb`, `.AppImage`) on `ubuntu-22.04` and **Windows** (`.msi`) on `windows-latest`, then uploads assets to [GitHub Releases](https://github.com/broisnischal/studio/releases).
+
+Local build:
+
+```bash
+npm run tauri:build                    # native
+npm run tauri:build -- --target x86_64-pc-windows-msvc   # Windows cross (needs toolchain)
+```
+
+Tag must match `version` in `src-tauri/tauri.conf.json` (e.g. tag `v0.1.0` ↔ version `0.1.0`).
+
 ## Commit / PR conventions
 
 - Concise commit messages focused on **why**.

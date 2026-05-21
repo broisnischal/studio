@@ -122,4 +122,9 @@
   [data-font="mono"] {
     font-family: var(--font-mono);
   }
+
+  .shiki-block .shiki,
+  .shiki-block pre {
+    background-color: transparent !important;
+  }
 }

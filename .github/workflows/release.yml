@@ -1,0 +1,92 @@
+# Build DB Studio for Linux + Windows and publish to GitHub Releases.
+#
+# Create a release:
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# Or run manually: Actions → Release → Run workflow
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (must match tauri.conf.json version, e.g. v0.1.0)
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            name: linux
+          - platform: windows-latest
+            name: windows
+
+    runs-on: ${{ matrix.platform }}
+    name: build-${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and upload release assets
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: DB Studio ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            ## DB Studio ${{ env.RELEASE_TAG }}
+
+            ### Linux
+            - `.deb` / `.AppImage` (check assets below)
+
+            ### Windows
+            - `.msi` installer (recommended)
+            - `.exe` NSIS setup if present
+
+            Built from commit ${{ github.sha }}.
+          releaseDraft: false
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          tauriScript: npx tauri
+          args: ''
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: db-studio-[platform]-[arch]-[bundle]

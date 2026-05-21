@@ -6,7 +6,7 @@ function loadHighlighter() {
   if (!highlighterPromise) {
     highlighterPromise = import('shiki').then(({ createHighlighter }) =>
       createHighlighter({
-        themes: ['github-dark', 'github-light'],
+        themes: ['vitesse-light', 'vitesse-dark'],
         langs: ['json', 'plaintext'],
       }),
     )
@@ -16,7 +16,7 @@ function loadHighlighter() {
 
 /** @param {ThemeId} theme */
 function shikiTheme(theme) {
-  return theme === 'light' ? 'github-light' : 'github-dark'
+  return theme === 'light' ? 'vitesse-light' : 'vitesse-dark'
 }
 
 /**

@@ -14,6 +14,9 @@
     loading = false,
     error = '',
     onrun = () => {},
+    onmodk = undefined,
+    onmodenter = undefined,
+    onmods = undefined,
   } = $props()
 
   let selected = $state(new Set())
@@ -51,7 +54,13 @@
   {/if}
 
   <div class="min-h-[200px] shrink-0 basis-[42%] border-b border-border p-2">
-    <SqlEditor bind:value={sql} class="h-full" />
+    <SqlEditor
+      bind:value={sql}
+      class="h-full"
+      {onmodk}
+      onmodenter={onmodenter ?? (() => onrun())}
+      {onmods}
+    />
   </div>
 
   <div class="flex min-h-0 flex-1 flex-col overflow-hidden">

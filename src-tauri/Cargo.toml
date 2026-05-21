@@ -26,3 +26,8 @@ tauri-plugin-log = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "json"] }
 urlencoding = "2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
