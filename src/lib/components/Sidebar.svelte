@@ -135,40 +135,47 @@
       </button>
     </div>
 
-    <ScrollArea class="min-h-0 flex-1">
-      <ul class="flex flex-col px-1 pb-2">
-        {#if loadingTables}
-          <li class="px-2.5 py-2 text-[12px] text-muted-foreground">Loading…</li>
-        {:else if tables.length === 0}
-          <li class="px-2.5 py-2 text-[12px] text-muted-foreground">
-            No tables in {activeSchema || 'schema'}
-          </li>
-        {:else if filteredTables.length === 0}
-          <li class="px-2.5 py-2 text-[12px] text-muted-foreground">No match</li>
-        {:else}
-          {#each filteredTables as table (table.name)}
-            <li>
-              <button
-                type="button"
-                class={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors',
-                  activeTable === table.name
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
-                )}
-                onclick={() => ontableselect(table.name)}
-              >
-                <Table2 class="size-3 shrink-0 opacity-50" />
-                <span class="min-w-0 flex-1 truncate font-mono text-[12px]">{table.name}</span>
-                <span class="shrink-0 font-mono text-[11px] tabular-nums opacity-60">
-                  {table.rowCount}
-                </span>
-              </button>
+    <div class="flex min-h-0 flex-1 flex-col">
+      <p class="px-3 pb-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+        Tables
+      </p>
+      <ScrollArea class="min-h-0 flex-1">
+        <ul class="flex w-full flex-col gap-0.5 px-1.5 pb-2">
+          {#if loadingTables}
+            <li class="px-2 py-2 text-[12px] text-muted-foreground">Loading…</li>
+          {:else if tables.length === 0}
+            <li class="px-2 py-2 text-[12px] text-muted-foreground">
+              No tables in {activeSchema || 'schema'}
             </li>
-          {/each}
-        {/if}
-      </ul>
-    </ScrollArea>
+          {:else if filteredTables.length === 0}
+            <li class="px-2 py-2 text-[12px] text-muted-foreground">No match</li>
+          {:else}
+            {#each filteredTables as table (table.name)}
+              <li>
+                <button
+                  type="button"
+                  class={cn(
+                    'grid w-full grid-cols-[14px_minmax(0,1fr)_2.75rem] items-center gap-x-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                    activeTable === table.name
+                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                      : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground',
+                  )}
+                  onclick={() => ontableselect(table.name)}
+                >
+                  <Table2 class="size-3 shrink-0 opacity-50" />
+                  <span class="truncate font-mono text-[12px] leading-none">{table.name}</span>
+                  <span
+                    class="text-right font-mono text-[11px] leading-none tabular-nums text-muted-foreground"
+                  >
+                    {table.rowCount}
+                  </span>
+                </button>
+              </li>
+            {/each}
+          {/if}
+        </ul>
+      </ScrollArea>
+    </div>
   </div>
 
   <footer class="flex items-center gap-1 border-t border-sidebar-border px-2 py-2">

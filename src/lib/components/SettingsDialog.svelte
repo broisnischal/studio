@@ -25,9 +25,10 @@
     settings = loadSettings()
   }
 
-  $effect(() => {
-    if (open) refreshSettings()
-  })
+  /** @param {boolean} next */
+  function handleOpenChange(next) {
+    if (next) refreshSettings()
+  }
 
   function setTheme(theme) {
     settings = updateSettings({ theme })
@@ -40,8 +41,8 @@
   const zoomLabel = $derived(`${Math.round(settings.zoom * 100)}%`)
 </script>
 
-<Dialog.Root bind:open>
-  <Dialog.Content class="max-w-sm gap-0 p-0 sm:max-w-sm">
+<Dialog.Root bind:open onOpenChange={handleOpenChange}>
+  <Dialog.Content class="flex max-w-sm flex-col gap-0 overflow-hidden p-0 sm:max-w-sm">
     <Dialog.Header class="border-b border-border px-6 py-5">
       <div class="flex items-center gap-3">
         <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -119,8 +120,8 @@
       </div>
     </div>
 
-    <Dialog.Footer class="border-t border-border px-6 py-4">
+    <div class="shrink-0 border-t border-border bg-card px-6 py-4">
       <Button type="button" class="w-full" onclick={() => (open = false)}>Done</Button>
-    </Dialog.Footer>
+    </div>
   </Dialog.Content>
 </Dialog.Root>

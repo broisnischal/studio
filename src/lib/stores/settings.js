@@ -1,3 +1,5 @@
+import { setMode } from 'mode-watcher'
+
 const STORAGE_KEY = 'db-studio:settings'
 
 /** @typedef {'light' | 'dark'} Theme */
@@ -47,9 +49,64 @@ export function saveSettings(settings) {
 /** @param {AppSettings} settings */
 export function applySettings(settings) {
   const root = document.documentElement
-  root.classList.toggle('dark', settings.theme === 'dark')
-  root.style.setProperty('--app-zoom', String(settings.zoom))
-  root.style.setProperty('--app-font-size', `${Math.round(13 * settings.zoom)}px`)
+  const zoom = settings.zoom
+  const isDark = settings.theme === 'dark'
+  root.classList.toggle('dark', isDark)
+  setMode(isDark ? 'dark' : 'light')
+  root.style.setProperty('--app-zoom', String(zoom))
+  root.style.setProperty('--app-font-size', `${Math.round(13 * zoom)}px`)
+}
+
+let zoomListenerInstalled = false
+
+/** @param {KeyboardEvent} e */
+function handleZoomKeydown(e) {
+  if (!e.ctrlKey && !e.metaKey) return
+  if (e.altKey) return
+
+  const { key, code } = e
+
+  if (key === '0' || code === 'Digit0' || code === 'Numpad0') {
+    e.preventDefault()
+    e.stopPropagation()
+    resetZoom()
+    return
+  }
+
+  if (
+    key === '=' ||
+    key === '+' ||
+    code === 'Equal' ||
+    code === 'NumpadAdd' ||
+    (e.shiftKey && code === 'Equal')
+  ) {
+    e.preventDefault()
+    e.stopPropagation()
+    increaseZoom()
+    return
+  }
+
+  if (key === '-' || key === '_' || code === 'Minus' || code === 'NumpadSubtract') {
+    e.preventDefault()
+    e.stopPropagation()
+    decreaseZoom()
+  }
+}
+
+/** Block Tauri webview zoom (Ctrl/Cmd + wheel) when hotkeys are enabled in the shell. */
+function handleZoomWheel(e) {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+}
+
+/** Register Ctrl/Cmd +/-/0 zoom shortcuts (capture phase, works in inputs). */
+export function installZoomShortcuts() {
+  if (zoomListenerInstalled || typeof window === 'undefined') return
+  zoomListenerInstalled = true
+  window.addEventListener('keydown', handleZoomKeydown, true)
+  window.addEventListener('wheel', handleZoomWheel, { capture: true, passive: false })
 }
 
 /** @param {Partial<AppSettings>} patch */

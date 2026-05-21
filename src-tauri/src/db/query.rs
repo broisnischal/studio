@@ -2,6 +2,7 @@ use super::connection::{require_pool, DbState};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sqlx::{Column, Row, TypeInfo};
+use std::collections::HashMap;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,6 +19,7 @@ pub struct TableRows {
     pub rows: Vec<Vec<Value>>,
     pub total: i64,
     pub query_ms: u64,
+    pub primary_key: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +79,74 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
     }
 
     Value::String(format!("<{type_name}>"))
+}
+
+async fn fetch_primary_key(
+    pool: &sqlx::PgPool,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>, String> {
+    let rows = sqlx::query(
+        r#"
+        SELECT kcu.column_name::text
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+         AND tc.table_name = kcu.table_name
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_schema = $1
+          AND tc.table_name = $2
+        ORDER BY kcu.ordinal_position
+        "#,
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to load primary key: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| r.try_get::<String, _>(0).ok())
+        .collect())
+}
+
+fn normalize_pg_type(data_type: &str) -> String {
+    data_type
+        .to_lowercase()
+        .split('(')
+        .next()
+        .unwrap_or(data_type)
+        .trim()
+        .to_string()
+}
+
+fn validate_typed_value(data_type: &str, value: &Value) -> Result<(), String> {
+    let t = normalize_pg_type(data_type);
+
+    match value {
+        Value::Null => return Ok(()),
+        Value::Bool(_) if t == "boolean" => return Ok(()),
+        Value::Number(n) if t.contains("int") || t == "serial" || t.ends_with("serial") => {
+            if !n.is_i64() && !n.is_u64() {
+                return Err(format!("Invalid integer for {data_type}"));
+            }
+            Ok(())
+        }
+        Value::Number(_) if t.contains("numeric") || t.contains("decimal") || t.contains("real") || t.contains("double") || t == "money" => Ok(()),
+        Value::String(s) if t.contains("int") || t == "serial" || t.ends_with("serial") => {
+            if s.parse::<i64>().is_err() {
+                Err(format!("Invalid integer for {data_type}: \"{s}\""))
+            } else {
+                Ok(())
+            }
+        }
+        Value::String(_) => Ok(()),
+        Value::Object(_) | Value::Array(_) if t == "json" || t == "jsonb" => Ok(()),
+        Value::Object(_) | Value::Array(_) => Err(format!("Expected scalar for {data_type}")),
+        _ => Ok(()),
+    }
 }
 
 pub async fn get_table_rows(
@@ -146,12 +216,145 @@ pub async fn get_table_rows(
         .map(|row| (0..row.len()).map(|i| cell_to_json(row, i)).collect())
         .collect();
 
+    let primary_key = fetch_primary_key(&pool, &schema, &table).await?;
+
     Ok(TableRows {
         columns,
         rows: data,
         total,
         query_ms: started.elapsed().as_millis() as u64,
+        primary_key,
     })
+}
+
+pub async fn update_table_cell(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_key: HashMap<String, Value>,
+    column: String,
+    value: Value,
+) -> Result<(), String> {
+    let pool = require_pool(&state)?;
+
+    if primary_key.is_empty() {
+        return Err("Cannot update row: table has no primary key".into());
+    }
+
+    let pk_columns = fetch_primary_key(&pool, &schema, &table).await?;
+    if pk_columns.is_empty() {
+        return Err("Cannot update row: table has no primary key".into());
+    }
+
+    for pk_col in &pk_columns {
+        if !primary_key.contains_key(pk_col) {
+            return Err(format!("Missing primary key column: {pk_col}"));
+        }
+    }
+
+    let meta_rows = sqlx::query(
+        r#"
+        SELECT column_name::text, data_type::text
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        "#,
+    ) 
+    .bind(&schema)
+    .bind(&table)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load column metadata: {e}"))?;
+
+    let mut column_types: HashMap<String, String> = HashMap::new();
+    for row in &meta_rows {
+        if let (Ok(name), Ok(dt)) = (
+            row.try_get::<String, _>(0),
+            row.try_get::<String, _>(1),
+        ) {
+            column_types.insert(name, dt);
+        }
+    }
+
+    let data_type = column_types
+        .get(&column)
+        .ok_or_else(|| format!("Unknown column: {column}"))?;
+
+    if normalize_pg_type(data_type).contains("bytea") {
+        return Err("Cannot edit bytea columns".into());
+    }
+
+    validate_typed_value(data_type, &value)?;
+
+    let mut where_parts = Vec::new();
+    let mut bind_idx = 2_u32;
+
+    for pk_col in &pk_columns {
+        where_parts.push(format!(r#""{pk_col}" = ${bind_idx}"#));
+        bind_idx += 1;
+    }
+
+    let sql = format!(
+        r#"UPDATE "{schema}"."{table}" SET "{column}" = $1 WHERE {}"#,
+        where_parts.join(" AND ")
+    );
+
+    let mut q = sqlx::query(&sql);
+    q = bind_typed_value(q, data_type, &value)?;
+    for pk_col in &pk_columns {
+        let pk_val = primary_key
+            .get(pk_col)
+            .ok_or_else(|| format!("Missing primary key: {pk_col}"))?;
+        let pk_type = column_types
+            .get(pk_col)
+            .ok_or_else(|| format!("Missing PK metadata: {pk_col}"))?;
+        q = bind_typed_value(q, pk_type, pk_val)?;
+    }
+
+    q.execute(&pool)
+        .await
+        .map_err(|e| format!("Update failed: {e}"))?;
+
+    Ok(())
+}
+
+fn bind_typed_value<'a>(
+    q: sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    data_type: &str,
+    value: &Value,
+) -> Result<sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+    let t = normalize_pg_type(data_type);
+
+    if value.is_null() {
+        return Ok(q.bind(None::<String>));
+    }
+
+    match value {
+        Value::Bool(b) => Ok(q.bind(*b)),
+        Value::Number(n) if n.is_i64() => Ok(q.bind(n.as_i64().unwrap())),
+        Value::Number(n) if n.is_u64() => Ok(q.bind(n.as_u64().unwrap() as i64)),
+        Value::Number(n) if n.is_f64() => Ok(q.bind(n.as_f64().unwrap())),
+        Value::String(s) if t.contains("int") || t == "serial" || t.ends_with("serial") => {
+            let parsed = s
+                .parse::<i64>()
+                .map_err(|_| format!("Invalid integer: {s}"))?;
+            Ok(q.bind(parsed))
+        }
+        Value::String(s) if t.contains("numeric") || t.contains("decimal") || t.contains("real") || t.contains("double") => {
+            Ok(q.bind(s.clone()))
+        }
+        Value::String(s) => Ok(q.bind(s.clone())),
+        Value::Object(_) | Value::Array(_) if t == "json" || t == "jsonb" => {
+            let json_str =
+                serde_json::to_string(value).map_err(|e| format!("Invalid JSON value: {e}"))?;
+            Ok(q.bind(json_str))
+        }
+        Value::Number(n) => Ok(q.bind(
+            n.as_f64()
+                .or_else(|| n.as_i64().map(|v| v as f64))
+                .ok_or_else(|| "Invalid number".to_string())?,
+        )),
+        _ => Err(format!("Unsupported value for {data_type}")),
+    }
 }
 
 fn is_row_returning_sql(sql: &str) -> bool {

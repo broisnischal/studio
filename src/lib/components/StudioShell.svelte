@@ -4,6 +4,7 @@
   import Sidebar from './Sidebar.svelte'
   import TableToolbar from './TableToolbar.svelte'
   import DataTable from './DataTable.svelte'
+  import RowDetailPanel from './RowDetailPanel.svelte'
   import SqlConsole from './SqlConsole.svelte'
   import CommandPalette from './CommandPalette.svelte'
   import ConnectionModal from './ConnectionModal.svelte'
@@ -16,6 +17,7 @@
     listTables,
     getTableRows,
     executeSql,
+    updateTableCell,
   } from '$lib/api.js'
 
   let connection = $state(null)
@@ -33,7 +35,11 @@
   let loadingTables = $state(false)
 
   let columns = $state([])
+  let primaryKey = $state([])
   let rows = $state([])
+  let savingCell = $state(false)
+  /** @type {{ rowIdx: number, colIdx: number, draft: string } | null} */
+  let editingCell = $state(null)
   let total = $state(0)
   let queryMs = $state(0)
   let loadingRows = $state(false)
@@ -41,7 +47,33 @@
   const pageSize = 50
 
   let selected = $state(new Set())
+  /** @type {{ rowIdx: number, colIdx: number } | null} */
+  /** @type {number | null} */
+  let focusedRow = $state(null)
   let error = $state('')
+
+  const inspectorTarget = $derived.by(() => {
+    if (editingCell) {
+      return {
+        kind: 'cell',
+        rowIdx: editingCell.rowIdx,
+        colIdx: editingCell.colIdx,
+      }
+    }
+    if (focusedRow !== null) {
+      return { kind: 'row', rowIdx: focusedRow }
+    }
+    if (selected.size === 1) {
+      return { kind: 'row', rowIdx: [...selected][0] }
+    }
+    if (selected.size > 1) {
+      return {
+        kind: 'rows',
+        rowIndices: [...selected].sort((a, b) => a - b),
+      }
+    }
+    return null
+  })
 
   let sqlText = $state('SELECT 1;')
   let sqlColumns = $state([])
@@ -109,11 +141,14 @@
     }
     loadingRows = true
     selected = new Set()
+    focusedRow = null
+    editingCell = null
     error = ''
     try {
       const offset = (page - 1) * pageSize
       const data = await getTableRows(activeSchema, activeTable, pageSize, offset)
       columns = data.columns
+      primaryKey = data.primaryKey ?? data.primary_key ?? []
       rows = data.rows
       total = data.total
       queryMs = data.queryMs
@@ -149,7 +184,6 @@
 
   async function onConnected(conn) {
     connection = conn
-    showConnectionModal = false
     page = 1
     tableFilter = ''
     error = ''
@@ -221,6 +255,44 @@
     if (activeTable) {
       activeView = 'table'
       loadRows()
+    }
+  }
+
+  /** @param {{ rowIdx: number, colIdx: number, value: unknown }} detail */
+  async function handleSaveCell(detail) {
+    if (!activeTable || !primaryKey.length) return
+
+    const col = columns[detail.colIdx]
+    if (!col) return
+
+    const row = rows[detail.rowIdx]
+    if (!row) return
+
+    /** @type {Record<string, unknown>} */
+    const pk = {}
+    for (const key of primaryKey) {
+      const keyIdx = columns.findIndex((c) => c.name === key)
+      if (keyIdx < 0) throw new Error(`Primary key column not found: ${key}`)
+      pk[key] = row[keyIdx]
+    }
+
+    savingCell = true
+    try {
+      await updateTableCell(
+        activeSchema,
+        activeTable,
+        pk,
+        col.name,
+        detail.value,
+      )
+      const next = rows.map((r, i) =>
+        i === detail.rowIdx
+          ? r.map((cell, j) => (j === detail.colIdx ? detail.value : cell))
+          : r,
+      )
+      rows = next
+    } finally {
+      savingCell = false
     }
   }
 </script>
@@ -326,7 +398,28 @@
         }}
       />
 
-      <DataTable {columns} {rows} loading={loadingRows} bind:selected />
+      <div class="flex min-h-0 min-w-0 flex-1">
+        <DataTable
+          {columns}
+          {rows}
+          {primaryKey}
+          loading={loadingRows}
+          saving={savingCell}
+          bind:selected
+          bind:focusedRow
+          bind:editingCell
+          onsave={handleSaveCell}
+        />
+        <RowDetailPanel
+          {columns}
+          {rows}
+          target={inspectorTarget}
+          onclose={() => {
+            focusedRow = null
+            selected = new Set()
+          }}
+        />
+      </div>
     {/if}
   </main>
 </div>

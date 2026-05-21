@@ -29,6 +29,7 @@ Supported databases today: **PostgreSQL only**. Other engines are future work.
 6. **Keep Tauri commands thin** — DB logic in `src-tauri/src/db/`, expose via `src-tauri/src/commands.rs`.
 7. **Match existing patterns** — Svelte 5 runes (`$state`, `$derived`, `$props`, `$bindable`), camelCase JSON from Rust (`#[serde(rename_all = "camelCase")]`).
 8. **Minimize diff scope** — only change what the task requires.
+9. **Follow [guidelines](.cursor/skills/guidelines/SKILL.md)** — think before coding, simplicity first, surgical edits, verifiable success criteria.
 
 ### Frontend rules (shadcn)
 
@@ -71,6 +72,8 @@ src/
       ConnectionModal.svelte
       Sidebar.svelte
       DataTable.svelte
+      RowDetailPanel.svelte  # Right inspector (Shiki, Normal/JSON)
+      ShikiBlock.svelte
       TableToolbar.svelte
     monaco-env.js            # Monaco worker setup for Vite
       ui/                    # shadcn-svelte (do not hand-edit unless fixing bugs)
@@ -93,6 +96,7 @@ AGENT.md                     # this file
 | `pg_list_tables` | Tables + row counts for schema |
 | `pg_get_table_rows` | Paginated rows + column metadata |
 | `pg_execute_sql` | Run SQL in SQL editor (SELECT vs DML) |
+| `pg_update_table_cell` | Update one cell (requires primary key) |
 
 ## Keyboard shortcuts
 
@@ -100,6 +104,10 @@ AGENT.md                     # this file
 |----------|--------|
 | `Mod+K` | Open command palette |
 | `Mod+Enter` | Run SQL (SQL view) |
+| `Mod+S` | Save inline cell edit (while editing) |
+| Double-click cell | Edit cell value |
+| `Enter` | Save edit (in cell input) |
+| `Escape` | Cancel edit |
 | `Mod+=` / `Mod+-` / `Mod+0` | Zoom in / out / reset |
 
 `Mod` is Cmd on macOS and Ctrl on Windows/Linux ([TanStack Hotkeys](https://tanstack.com/hotkeys/latest/docs/installation#svelte)).

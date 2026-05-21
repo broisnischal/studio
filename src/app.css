@@ -108,11 +108,14 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  body,
-  #app {
+  body {
     @apply m-0 h-full min-h-0 overflow-hidden bg-background text-foreground;
     font-family: var(--font-sans);
     zoom: var(--app-zoom);
+  }
+
+  #app {
+    @apply m-0 h-full min-h-0 overflow-hidden;
   }
 
   .font-mono,

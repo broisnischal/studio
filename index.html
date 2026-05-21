@@ -1,6 +1,15 @@
 <!doctype html>
 <html lang="en" class="h-full">
   <head>
+    <script>
+      try {
+        const raw = localStorage.getItem('db-studio:settings')
+        const theme = raw ? JSON.parse(raw).theme : 'dark'
+        if (theme !== 'light') document.documentElement.classList.add('dark')
+      } catch (_) {
+        document.documentElement.classList.add('dark')
+      }
+    </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />

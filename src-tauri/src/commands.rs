@@ -1,7 +1,9 @@
 use crate::db::{
     connect, disconnect, execute_sql, get_table_rows, list_schemas, list_tables, test_connection,
-    ConnectionConfig, SqlResult, TableInfo, TableRows,
+    update_table_cell, ConnectionConfig, SqlResult, TableInfo, TableRows,
 };
+use serde_json::Value;
+use std::collections::HashMap;
 use crate::db::DbState;
 use tauri::State;
 
@@ -50,4 +52,16 @@ pub async fn pg_get_table_rows(
 #[tauri::command]
 pub async fn pg_execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlResult, String> {
     execute_sql(state, sql).await
+}
+
+#[tauri::command]
+pub async fn pg_update_table_cell(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    primary_key: HashMap<String, Value>,
+    column: String,
+    value: Value,
+) -> Result<(), String> {
+    update_table_cell(state, schema, table, primary_key, column, value).await
 }

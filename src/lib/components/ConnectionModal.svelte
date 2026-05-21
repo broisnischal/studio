@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
   import X from '@lucide/svelte/icons/x'
   import { testPostgresConnection, connectPostgres } from '$lib/api.js'
@@ -20,7 +21,7 @@
     onconnected = () => {},
   } = $props()
 
-  let saved = $state([])
+  let saved = $state(loadSavedConnections())
   let tab = $state('new')
   let testing = $state(false)
   let connecting = $state(false)
@@ -39,14 +40,6 @@
     return { name, host, port, database, user, password, ssl }
   }
 
-  function refreshSaved() {
-    saved = loadSavedConnections()
-  }
-
-  $effect(() => {
-    if (open) refreshSaved()
-  })
-
   function resetForm(conn) {
     name = conn?.name ?? 'Local PostgreSQL'
     host = conn?.host ?? '127.0.0.1'
@@ -59,9 +52,35 @@
     testOk = false
   }
 
+  function prepareForOpen() {
+    const list = loadSavedConnections()
+    saved = list
+    tab = list.length > 0 ? 'saved' : 'new'
+    error = ''
+    testOk = false
+  }
+
+  onMount(() => {
+    if (open) prepareForOpen()
+  })
+
+  /** @param {boolean} next */
+  function handleOpenChange(next) {
+    if (next) prepareForOpen()
+  }
+
+  function closeModal() {
+    open = false
+  }
+
   function useSaved(conn) {
     resetForm(conn)
     tab = 'new'
+  }
+
+  async function connectSaved(conn) {
+    resetForm(conn)
+    await handleConnect()
   }
 
   async function handleTest() {
@@ -90,8 +109,8 @@
         ...payload,
         port: Number(payload.port) || 5432,
       })
-      onconnected(payload)
-      open = false
+      closeModal()
+      await onconnected(payload)
     } catch (e) {
       error = String(e)
     } finally {
@@ -105,14 +124,17 @@
   }
 </script>
 
-<Dialog.Root bind:open>
-  <Dialog.Content class="max-w-md gap-0 p-0 sm:max-w-md">
-    <Dialog.Header class="gap-1 border-b border-border px-6 py-5">
+<Dialog.Root bind:open onOpenChange={handleOpenChange}>
+  <Dialog.Content
+    class="flex max-h-[min(90vh,640px)] w-[calc(100%-2rem)] max-w-md flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+    showCloseButton={true}
+  >
+    <Dialog.Header class="shrink-0 gap-1 border-b border-border px-6 py-5">
       <div class="flex items-start gap-3">
         <div class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
           <Database class="size-4 text-muted-foreground" />
         </div>
-        <div class="flex flex-col gap-1">
+        <div class="flex min-w-0 flex-col gap-1">
           <Dialog.Title class="text-base font-semibold">Connect to PostgreSQL</Dialog.Title>
           <Dialog.Description class="text-sm text-muted-foreground">
             Add a database connection to explore schemas and tables.
@@ -121,108 +143,122 @@
       </div>
     </Dialog.Header>
 
-    <Tabs.Root bind:value={tab} class="px-6 pt-4">
-      <Tabs.List class="grid w-full grid-cols-2">
-        <Tabs.Trigger value="new">New connection</Tabs.Trigger>
-        <Tabs.Trigger value="saved" disabled={saved.length === 0}>
-          Saved ({saved.length})
-        </Tabs.Trigger>
-      </Tabs.List>
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <Tabs.Root bind:value={tab} class="flex w-full flex-col gap-4">
+        <Tabs.List class="grid h-9 w-full shrink-0 grid-cols-2">
+          <Tabs.Trigger value="new">New connection</Tabs.Trigger>
+          <Tabs.Trigger value="saved">Saved ({saved.length})</Tabs.Trigger>
+        </Tabs.List>
 
-      <Tabs.Content value="saved" class="mt-4 flex flex-col gap-2">
-        {#if saved.length === 0}
-          <p class="text-sm text-muted-foreground">No saved connections.</p>
-        {:else}
-          {#each saved as conn (conn.id)}
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-accent"
-                onclick={() => useSaved(conn)}
+        <Tabs.Content value="saved" class="mt-0 flex flex-col gap-2">
+          {#if saved.length === 0}
+            <p class="text-sm text-muted-foreground">No saved connections yet.</p>
+          {:else}
+            {#each saved as conn (conn.id)}
+              <div
+                class="flex items-stretch overflow-hidden rounded-lg border border-border bg-card"
               >
-                <span class="truncate text-sm font-medium">{conn.name}</span>
-                <span class="truncate font-mono text-xs text-muted-foreground">
-                  {conn.user}@{conn.host}:{conn.port}/{conn.database}
-                </span>
-              </button>
-              <button
-                type="button"
-                class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                aria-label="Remove saved connection"
-                onclick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  handleDelete(conn.id)
-                }}
-              >
-                <X class="size-4" />
-              </button>
-            </div>
-          {/each}
-        {/if}
-      </Tabs.Content>
+                <button
+                  type="button"
+                  class="flex min-w-0 flex-1 flex-col gap-0.5 px-3 py-2.5 text-left transition-colors hover:bg-accent"
+                  onclick={() => useSaved(conn)}
+                >
+                  <span class="truncate text-sm font-medium">{conn.name}</span>
+                  <span class="truncate font-mono text-xs text-muted-foreground">
+                    {conn.user}@{conn.host}:{conn.port}/{conn.database}
+                  </span>
+                </button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  class="my-2 mr-1 shrink-0"
+                  disabled={connecting || testing}
+                  onclick={() => connectSaved(conn)}
+                >
+                  Connect
+                </Button>
+                <button
+                  type="button"
+                  class="inline-flex w-9 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  aria-label="Remove saved connection"
+                  onclick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleDelete(conn.id)
+                  }}
+                >
+                  <X class="size-4" />
+                </button>
+              </div>
+            {/each}
+          {/if}
+        </Tabs.Content>
 
-      <Tabs.Content value="new" class="mt-4">
-        <div class="flex flex-col gap-4">
-          <div class="flex flex-col gap-2">
-            <Label for="conn-name">Connection name</Label>
-            <Input id="conn-name" bind:value={name} required />
-          </div>
-
-          <div class="grid grid-cols-[1fr_100px] gap-3">
+        <Tabs.Content value="new" class="mt-0">
+          <div class="flex flex-col gap-4">
             <div class="flex flex-col gap-2">
-              <Label for="conn-host">Host</Label>
-              <Input id="conn-host" bind:value={host} required />
+              <Label for="conn-name">Connection name</Label>
+              <Input id="conn-name" bind:value={name} required />
             </div>
+
+            <div class="grid grid-cols-[1fr_100px] gap-3">
+              <div class="flex flex-col gap-2">
+                <Label for="conn-host">Host</Label>
+                <Input id="conn-host" bind:value={host} required />
+              </div>
+              <div class="flex flex-col gap-2">
+                <Label for="conn-port">Port</Label>
+                <Input id="conn-port" type="number" bind:value={port} required />
+              </div>
+            </div>
+
             <div class="flex flex-col gap-2">
-              <Label for="conn-port">Port</Label>
-              <Input id="conn-port" type="number" bind:value={port} required />
+              <Label for="conn-db">Database</Label>
+              <Input id="conn-db" bind:value={database} required />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div class="flex flex-col gap-2">
+                <Label for="conn-user">User</Label>
+                <Input id="conn-user" bind:value={user} autocomplete="username" required />
+              </div>
+              <div class="flex flex-col gap-2">
+                <Label for="conn-pass">Password</Label>
+                <Input
+                  id="conn-pass"
+                  type="password"
+                  bind:value={password}
+                  autocomplete="current-password"
+                />
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2.5">
+              <Checkbox checked={ssl} onCheckedChange={(v) => (ssl = v === true)} />
+              <Label class="font-normal text-muted-foreground">Use SSL (sslmode=require)</Label>
             </div>
           </div>
+        </Tabs.Content>
+      </Tabs.Root>
 
-          <div class="flex flex-col gap-2">
-            <Label for="conn-db">Database</Label>
-            <Input id="conn-db" bind:value={database} required />
-          </div>
+      {#if error}
+        <p class="mt-3 text-sm text-destructive">{error}</p>
+      {/if}
+      {#if testOk}
+        <p class="mt-3 text-sm text-muted-foreground">Connection test successful.</p>
+      {/if}
+    </div>
 
-          <div class="grid grid-cols-2 gap-3">
-            <div class="flex flex-col gap-2">
-              <Label for="conn-user">User</Label>
-              <Input id="conn-user" bind:value={user} autocomplete="username" required />
-            </div>
-            <div class="flex flex-col gap-2">
-              <Label for="conn-pass">Password</Label>
-              <Input
-                id="conn-pass"
-                type="password"
-                bind:value={password}
-                autocomplete="current-password"
-              />
-            </div>
-          </div>
-
-          <div class="flex items-center gap-2.5">
-            <Checkbox checked={ssl} onCheckedChange={(v) => (ssl = v === true)} />
-            <Label class="font-normal text-muted-foreground">Use SSL (sslmode=require)</Label>
-          </div>
-        </div>
-      </Tabs.Content>
-    </Tabs.Root>
-
-    {#if error}
-      <p class="px-6 pt-3 text-sm text-destructive">{error}</p>
-    {/if}
-    {#if testOk}
-      <p class="px-6 pt-3 text-sm text-muted-foreground">Connection test successful.</p>
-    {/if}
-
-    <Dialog.Footer class="flex-row justify-end gap-2 border-t border-border px-6 py-4">
+    <div
+      class="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-card px-6 py-4"
+    >
       <Button type="button" variant="outline" onclick={handleTest} disabled={testing || connecting}>
         {testing ? 'Testing…' : 'Test connection'}
       </Button>
       <Button type="button" onclick={handleConnect} disabled={connecting || testing}>
         {connecting ? 'Connecting…' : 'Connect'}
       </Button>
-    </Dialog.Footer>
+    </div>
   </Dialog.Content>
 </Dialog.Root>

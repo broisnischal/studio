@@ -88,3 +88,24 @@ export async function executeSql(sql) {
     throw new Error(formatInvokeError(err))
   }
 }
+
+/**
+ * @param {string} schema
+ * @param {string} table
+ * @param {Record<string, unknown>} primaryKey
+ * @param {string} column
+ * @param {unknown} value
+ */
+export async function updateTableCell(schema, table, primaryKey, column, value) {
+  try {
+    return await invoke('pg_update_table_cell', {
+      schema,
+      table,
+      primaryKey,
+      column,
+      value,
+    })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}
