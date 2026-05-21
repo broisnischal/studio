@@ -88,5 +88,3 @@ jobs:
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           tauriScript: npx tauri
           args: ''
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: db-studio-[platform]-[arch]-[bundle]
