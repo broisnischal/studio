@@ -30,6 +30,7 @@
     parseCellInput,
     valueToEditString,
   } from '$lib/cell-value.js'
+  import { cellLinkHref } from '$lib/cell-display.js'
 
   let {
     columns = [],
@@ -116,12 +117,16 @@
     return findForeignKeyForColumn(foreignKeys, col.name)
   }
 
-  /** @param {number} rowIdx @param {number} colIdx @param {MouseEvent} [e] */
-  function tryFollowForeignKey(rowIdx, colIdx, e) {
+  /**
+   * @param {number} rowIdx
+   * @param {number} colIdx
+   * @param {MouseEvent} [e]
+   * @param {{ requireModifier?: boolean }} [opts]
+   */
+  function tryFollowForeignKey(rowIdx, colIdx, e, opts = {}) {
     if (!foreignKeyForCell(rowIdx, colIdx)) return false
-    if (e && !(e.metaKey || e.ctrlKey || e.altKey)) return false
-    e.preventDefault()
-    e.stopPropagation()
+    if (opts.requireModifier && e && !(e.metaKey || e.ctrlKey || e.altKey)) return false
+    if (e) { e.preventDefault(); e.stopPropagation() }
     onfollowforeignkey({ rowIdx, colIdx })
     return true
   }
@@ -466,11 +471,11 @@
                         )}
                         data-font="mono"
                         onclick={(e) => {
-                          if (tryFollowForeignKey(idx, colIdx, e)) return
+                          if (tryFollowForeignKey(idx, colIdx, e, { requireModifier: true })) return
                         }}
                         ondblclick={(e) => {
                           e.preventDefault()
-                          if (cellFk && (e.metaKey || e.ctrlKey)) {
+                          if (cellFk) {
                             tryFollowForeignKey(idx, colIdx, e)
                             return
                           }
@@ -495,16 +500,28 @@
                             onkeydown={handleEditKeydown}
                           />
                         {:else}
+                          {@const cellText = formatCell(cell)}
+                          {@const cellHref = !cellFk ? cellLinkHref(cellText) : null}
                           <span
                             class={cn(
                               'flex items-center gap-1.5 truncate',
                               cellFk && 'text-foreground',
                             )}
                             title={cellFk
-                              ? `${formatCell(cell)} — ⌘-click to open ${foreignKeyTargetLabel(cellFk)}`
-                              : formatCell(cell)}
+                              ? `${cellText} — Ctrl/⌘-click or double-click to open ${foreignKeyTargetLabel(cellFk)}`
+                              : cellText}
                           >
-                            <span class="truncate">{formatCell(cell)}</span>
+                            {#if cellHref}
+                              <a
+                                href={cellHref}
+                                class="truncate text-link underline underline-offset-2 decoration-link/45 hover:text-link-hover hover:decoration-link"
+                                onclick={(e) => e.stopPropagation()}
+                              >
+                                {cellText}
+                              </a>
+                            {:else}
+                              <span class="truncate">{cellText}</span>
+                            {/if}
                             {#if cellFk}
                               <ExternalLink
                                 class="size-3 shrink-0 text-ring/80 transition-colors group-hover/fk:text-foreground"

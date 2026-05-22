@@ -1,4 +1,4 @@
-/** @typedef {'table' | 'sql' | 'welcome'} StudioTabKind */
+/** @typedef {'table' | 'sql' | 'welcome' | 'ai'} StudioTabKind */
 
 /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
 /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
@@ -149,16 +149,31 @@ export function createWelcomeTab() {
   })
 }
 
+export function createAiTab() {
+  return /** @type {StudioTab} */ ({
+    id: nextTabId(),
+    kind: 'ai',
+    title: 'AI Chat',
+    state: null,
+  })
+}
+
+/** @param {StudioTab[]} tabs */
+export function findAiTab(tabs) {
+  return tabs.find((t) => t.kind === 'ai') ?? null
+}
+
 /** @param {TableTabState} state */
 export function tableTabTitle(state) {
   if (!state.table) return 'Table'
-  return state.schema ? `${state.schema}.${state.table}` : state.table
+  return state.table
 }
 
 /** @param {StudioTab} tab */
 export function tabDisplayTitle(tab) {
   if (tab.kind === 'table' && tab.state) return tableTabTitle(/** @type {TableTabState} */ (tab.state))
   if (tab.kind === 'sql') return 'SQL'
+  if (tab.kind === 'ai') return 'AI Chat'
   return tab.title
 }
 

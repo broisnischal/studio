@@ -10,6 +10,7 @@
   import Unplug from '@lucide/svelte/icons/unplug'
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js'
   import * as Select from '$lib/components/ui/select/index.js'
+  import * as Tabs from '$lib/components/ui/tabs/index.js'
   import ResizeHandle from './ResizeHandle.svelte'
   import TableListSkeleton from './TableListSkeleton.svelte'
   import { cn } from '$lib/utils.js'
@@ -49,38 +50,36 @@
 </script>
 
 <div class="flex h-full shrink-0" style:width="{width}px" data-studio-region="sidebar">
-  <aside class="flex h-full min-w-0 flex-1 flex-col bg-sidebar text-sidebar-foreground">
+  <aside class="flex h-full min-w-0 flex-1 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
   <div class="flex min-h-0 flex-1 flex-col">
     {#if connectionName}
-      <div class="flex gap-0.5 border-b border-sidebar-border px-1.5 py-1.5">
-        <button
-          type="button"
-          class={cn(
-            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-ui-xs transition-colors',
-            activeView === 'table'
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
-          )}
-          title="Data view (⌘⇧D)"
-          onclick={() => onviewchange('table')}
+      <div class="flex h-9 shrink-0 items-center border-b border-sidebar-border px-1.5">
+        <Tabs.Root
+          value={activeView}
+          onValueChange={(v) => {
+            if (v === 'table' || v === 'sql') onviewchange(v)
+          }}
+          class="w-full"
         >
-          <Table2 class="size-3" />
-          Data
-        </button>
-        <button
-          type="button"
-          class={cn(
-            'flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-ui-xs transition-colors',
-            activeView === 'sql'
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground',
-          )}
-          title="SQL editor (⌘⇧S)"
-          onclick={() => onviewchange('sql')}
-        >
-          <Terminal class="size-3" />
-          SQL
-        </button>
+          <Tabs.List class="grid h-8 w-full grid-cols-2">
+            <Tabs.Trigger
+              value="table"
+              class="gap-1.5 text-ui-xs"
+              title="Data view (⌘⇧D)"
+            >
+              <Table2 class="size-3 shrink-0 opacity-60" />
+              Data
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="sql"
+              class="gap-1.5 text-ui-xs"
+              title="SQL editor (⌘⇧S)"
+            >
+              <Terminal class="size-3 shrink-0 opacity-60" />
+              SQL
+            </Tabs.Trigger>
+          </Tabs.List>
+        </Tabs.Root>
       </div>
     {/if}
 

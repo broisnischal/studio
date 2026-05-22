@@ -164,7 +164,7 @@
 </script>
 
 <header
-  class="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel px-3"
+  class="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel px-3"
 >
   <!-- Left -->
   <div class="flex shrink-0 items-center gap-0.5">

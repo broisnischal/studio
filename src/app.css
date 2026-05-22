@@ -33,6 +33,8 @@
   --sidebar-accent-foreground: oklch(0.15 0 0);
   --sidebar-border: oklch(0.9 0 0);
   --panel: oklch(0.99 0 0);
+  --link: oklch(0.42 0.14 250);
+  --link-hover: oklch(0.32 0.16 250);
   --editor-font-size: 16px;
   --editor-line-height: 26px;
 }
@@ -63,6 +65,8 @@
   --sidebar-accent-foreground: oklch(0.98 0 0);
   --sidebar-border: oklch(1 0 0 / 6%);
   --panel: oklch(0.12 0 0);
+  --link: oklch(0.74 0.12 250);
+  --link-hover: oklch(0.82 0.1 250);
   --editor-surface: oklch(0.15 0 0);
   --editor-line-highlight: oklch(0.19 0 0);
 }
@@ -95,6 +99,8 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-panel: var(--panel);
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
 }
@@ -157,6 +163,21 @@
   .shiki-block .shiki,
   .shiki-block pre {
     background-color: transparent !important;
+  }
+
+  /* Table / autodetected mailto links — primary is too dark on dark backgrounds */
+  [data-studio-region='main'] table td a,
+  [data-studio-region='main'] table td a:visited,
+  a[x-apple-data-detectors] {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(in oklch, var(--link) 45%, transparent);
+  }
+
+  [data-studio-region='main'] table td a:hover {
+    color: var(--link-hover);
+    text-decoration-color: var(--link);
   }
 }
 

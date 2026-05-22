@@ -79,17 +79,15 @@
     </Alert.Root>
   {/if}
 
-  <div class="shrink-0 basis-[42%] border-b border-border bg-panel p-2">
-    <div class="relative min-h-[200px] h-full">
-      <SqlEditor
-        bind:value={sql}
-        class="absolute inset-0"
-        {schemaHints}
-        {onmodk}
-        onmodenter={onmodenter ?? (() => onrun())}
-        {onmods}
-      />
-    </div>
+  <div class="relative min-h-[180px] shrink-0 basis-[55%] border-b border-border bg-panel">
+    <SqlEditor
+      bind:value={sql}
+      class="absolute inset-0"
+      {schemaHints}
+      {onmodk}
+      onmodenter={onmodenter ?? (() => onrun())}
+      {onmods}
+    />
   </div>
 
   <div class="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -98,9 +96,12 @@
     {:else if loading}
       <DataTableSkeleton columnCount={6} rowCount={10} />
     {:else}
-      <p class="px-4 py-6 font-mono text-ui-sm text-muted-foreground">
-        Results appear here after you run a query.
-      </p>
+      <div class="flex h-full flex-col items-center justify-center gap-2 text-center">
+        <Play class="size-6 text-muted-foreground/20" />
+        <p class="font-mono text-ui-sm text-muted-foreground/50">
+          Run a query to see results
+        </p>
+      </div>
     {/if}
   </div>
 </div>

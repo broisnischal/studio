@@ -2,6 +2,7 @@
   import Table2 from '@lucide/svelte/icons/table-2'
   import Terminal from '@lucide/svelte/icons/terminal'
   import FileText from '@lucide/svelte/icons/file-text'
+  import Bot from '@lucide/svelte/icons/bot'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
   import { cn } from '$lib/utils.js'
@@ -21,6 +22,7 @@
   function tabIcon(tab) {
     if (tab.kind === 'sql') return Terminal
     if (tab.kind === 'table') return Table2
+    if (tab.kind === 'ai') return Bot
     return FileText
   }
 </script>

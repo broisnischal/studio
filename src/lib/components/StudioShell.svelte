@@ -9,8 +9,10 @@
   import RowDetailPanel from './RowDetailPanel.svelte'
   import SqlConsole from './SqlConsole.svelte'
   import CommandPalette from './CommandPalette.svelte'
+  import AiChat from './AiChat.svelte'
   import ConnectionModal from './ConnectionModal.svelte'
   import SettingsDialog from './SettingsDialog.svelte'
+  import KeyboardShortcutsDialog from './KeyboardShortcutsDialog.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -26,8 +28,10 @@
     createTableTab,
     createSqlTab,
     createWelcomeTab,
+    createAiTab,
     findTableTab,
     findSqlTab,
+    findAiTab,
     findLastTableTab,
     tableTabTitle,
     cycleTabIndex,
@@ -64,6 +68,7 @@
   let connection = $state(null)
   let showConnectionModal = $state(true)
   let showSettingsModal = $state(false)
+  let showShortcutsModal = $state(false)
   let commandOpen = $state(false)
   let sidebarOpen = $state(loadLayout().navSidebarOpen)
 
@@ -138,6 +143,22 @@
       columnsByTable,
     }
   })
+
+  const connectionId = $derived(
+    connection
+      ? `${connection.host}:${connection.port}/${connection.database}@${connection.user}`
+      : '',
+  )
+
+  const aiSchemaContext = $derived.by(() => ({
+    schemas: [...schemas],
+    activeSchema,
+    tables: tables.map((t) => ({ name: t.name, rowCount: t.rowCount })),
+    activeTable,
+    columns: columns.map((c) => ({ name: c.name, dataType: c.dataType ?? c.data_type ?? '' })),
+    primaryKey: [...primaryKey],
+    foreignKeys: foreignKeys.map((fk) => ({ ...fk })),
+  }))
 
   const inspectorTarget = $derived.by(() => {
     if (activeTab?.kind !== 'table') return null
@@ -263,7 +284,7 @@
 
   /** @param {StudioTab} tab */
   async function applyTabToEditor(tab) {
-    if (tab.kind === 'welcome') {
+    if (tab.kind === 'welcome' || tab.kind === 'ai') {
       clearTableEditor()
       return
     }
@@ -288,6 +309,12 @@
   createHotkey('Mod+K', (e) => {
     e.preventDefault()
     commandOpen = true
+  })
+
+  createHotkey('Mod+Shift+A', (e) => {
+    if (!connection) return
+    e.preventDefault()
+    openAiTab()
   })
 
   createHotkey('Mod+F', (e) => {
@@ -362,6 +389,11 @@
       commandOpen = false
       return
     }
+    if (showShortcutsModal) {
+      e.preventDefault()
+      showShortcutsModal = false
+      return
+    }
     if (showConnectionModal || showSettingsModal) return
     if (editingCell) {
       e.preventDefault()
@@ -375,6 +407,13 @@
 
   createHotkey('Mod+Backspace', (e) => {
     if (commandOpen || showConnectionModal || showSettingsModal) return
+    // Ctrl+Backspace is the word-delete shortcut in inputs/textareas — don't steal it
+    const el = document.activeElement
+    if (
+      el instanceof HTMLInputElement ||
+      el instanceof HTMLTextAreaElement ||
+      (el instanceof HTMLElement && el.isContentEditable)
+    ) return
     if (activeTab?.kind !== 'table' || !activeTable || selected.size === 0) return
     e.preventDefault()
     void deleteSelectedRows()
@@ -385,6 +424,14 @@
     if (commandOpen || showConnectionModal || showSettingsModal) return
     e.preventDefault()
     void handleModRefresh()
+  })
+
+  createHotkey('?', (e) => {
+    if (commandOpen || showConnectionModal || showSettingsModal || showShortcutsModal) return
+    const tag = document.activeElement?.tagName ?? ''
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    e.preventDefault()
+    showShortcutsModal = true
   })
 
   /** @returns {boolean} */
@@ -450,13 +497,37 @@
     clearTableEditor()
   }
 
+  function dropWelcomeTabs() {
+    tabs = tabs.filter((t) => t.kind !== 'welcome')
+  }
+
   function openSqlTab() {
     saveActiveTabState()
+    dropWelcomeTabs()
+    const existing = findSqlTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
     const tab = createSqlTab()
     tabs = [...tabs, tab]
     activeTabId = tab.id
     clearTableEditor()
     applySqlSnapshot(cloneSqlTabState(/** @type {SqlTabState} */ (tab.state)))
+  }
+
+  function openAiTab() {
+    const existing = findAiTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
+    saveActiveTabState()
+    dropWelcomeTabs()
+    const tab = createAiTab()
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+    clearTableEditor()
   }
 
   /** @param {string} id */
@@ -510,6 +581,7 @@
       return
     }
     saveActiveTabState()
+    dropWelcomeTabs()
     const tab = createTableTab(schema, table)
     tabs = [...tabs, tab]
     activeTabId = tab.id
@@ -893,6 +965,19 @@
     }
   }
 
+  /** Write SQL into the SQL editor and focus it. */
+  async function handleAiWriteSql(sql) {
+    await focusSqlView()
+    sqlText = sql
+  }
+
+  /** Run SQL from AI chat — writes to editor and executes. */
+  async function handleAiRunSql(sql) {
+    await focusSqlView()
+    sqlText = sql
+    await runSql()
+  }
+
   async function focusSqlView() {
     const existing = findSqlTab(tabs)
     if (existing) {
@@ -937,6 +1022,8 @@
 
 <SettingsDialog bind:open={showSettingsModal} />
 
+<KeyboardShortcutsDialog bind:open={showShortcutsModal} />
+
 <CommandPalette
   bind:open={commandOpen}
   connected={!!connection}
@@ -951,6 +1038,8 @@
   onopenconnection={() => (showConnectionModal = true)}
   ondisconnect={handleDisconnect}
   onrefresh={handleRefresh}
+  onopenai={() => openAiTab()}
+  onopenshortcuts={() => (showShortcutsModal = true)}
 />
 
 <div class="flex h-full min-h-0 w-full overflow-hidden bg-background">
@@ -1001,7 +1090,21 @@
         onnew={openWelcomeTab}
       />
 
-      {#if activeTab?.kind === 'sql'}
+      <!-- AI tab: always mounted once it exists so conversation state survives tab switches -->
+      {#if tabs.some((t) => t.kind === 'ai')}
+        <div class={activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+          <AiChat
+            schemaContext={aiSchemaContext}
+            {connectionId}
+            isActive={activeTab?.kind === 'ai'}
+            onwritesql={(sql) => void handleAiWriteSql(sql)}
+          />
+        </div>
+      {/if}
+
+      {#if activeTab?.kind === 'ai'}
+        <!-- handled by the always-mounted block above -->
+      {:else if activeTab?.kind === 'sql'}
         <SqlConsole
           bind:sql={sqlText}
           columns={sqlColumns}

@@ -6,6 +6,8 @@
   import Database from '@lucide/svelte/icons/database'
   import RefreshCw from '@lucide/svelte/icons/refresh-cw'
   import CornerDownLeft from '@lucide/svelte/icons/corner-down-left'
+  import Bot from '@lucide/svelte/icons/bot'
+  import Keyboard from '@lucide/svelte/icons/keyboard'
   import * as Command from '$lib/components/ui/command/index.js'
   import { formatTableRowCount } from '$lib/table-list.js'
 
@@ -23,6 +25,8 @@
     onopenconnection = () => {},
     ondisconnect = () => {},
     onrefresh = () => {},
+    onopenai = () => {},
+    onopenshortcuts = () => {},
   } = $props()
 
   function run(action) {
@@ -97,6 +101,14 @@
           </Command.Group>
         {/if}
 
+        <Command.Group heading="AI">
+          <Command.Item value="ask ai assistant chat query" onSelect={() => run(onopenai)}>
+            <Bot class="size-4 opacity-60" />
+            <span>Ask AI</span>
+            <Command.Shortcut>⌘⇧A</Command.Shortcut>
+          </Command.Item>
+        </Command.Group>
+
         <Command.Group heading="Actions">
           <Command.Item value="refresh schema tables" onSelect={() => run(onrefresh)}>
             <RefreshCw class="size-4 opacity-60" />
@@ -105,6 +117,11 @@
           <Command.Item value="open settings preferences" onSelect={() => run(onopensettings)}>
             <Settings class="size-4 opacity-60" />
             <span>Settings</span>
+          </Command.Item>
+          <Command.Item value="keyboard shortcuts keybindings hotkeys help" onSelect={() => run(onopenshortcuts)}>
+            <Keyboard class="size-4 opacity-60" />
+            <span>Keyboard shortcuts</span>
+            <Command.Shortcut>?</Command.Shortcut>
           </Command.Item>
           <Command.Item value="disconnect database" onSelect={() => run(ondisconnect)}>
             <Unplug class="size-4 opacity-60" />
