@@ -849,6 +849,12 @@ fn bind_typed_value<'a>(
                 .map_err(|_| format!("Invalid integer: {s}"))?;
             Ok(q.bind(parsed))
         }
+        Value::String(s) if t == "uuid" => {
+            let parsed = s
+                .parse::<Uuid>()
+                .map_err(|_| format!("Invalid UUID: {s}"))?;
+            Ok(q.bind(parsed))
+        }
         Value::String(s) if t.contains("numeric") || t.contains("decimal") || t.contains("real") || t.contains("double") => {
             Ok(q.bind(s.clone()))
         }

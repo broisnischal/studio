@@ -3,6 +3,7 @@
   import { marked } from 'marked'
   import Bot from '@lucide/svelte/icons/bot'
   import Send from '@lucide/svelte/icons/send'
+  import Square from '@lucide/svelte/icons/square'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Plus from '@lucide/svelte/icons/plus'
@@ -22,12 +23,13 @@
   import { cn } from '$lib/utils.js'
   import { executeSql } from '$lib/api.js'
   import {
-    chatCompletionRaw,
+    chatCompletionStream,
     AI_TOOLS,
     isDestructiveSql,
     parseAssistantMessage,
     buildSystemPrompt,
   } from '$lib/ai.js'
+  import { renderMermaidSync, THEMES } from 'beautiful-mermaid'
   import { loadAiSettings, saveAiSettings } from '$lib/stores/ai-settings.js'
   import {
     listConversations,
@@ -41,6 +43,7 @@
    * @typedef {
    *   | { id: string, kind: 'user', text: string }
    *   | { id: string, kind: 'assistant', parts: import('$lib/ai.js').AssistantPart[] }
+   *   | { id: string, kind: 'streaming' }
    *   | { id: string, kind: 'result', sql: string, columns: {name:string,dataType?:string}[], rows: unknown[][], total: number, error: string|null, isSchema?: boolean }
    *   | { id: string, kind: 'confirm', sql: string, resolve: (ok: boolean) => void }
    *   | { id: string, kind: 'thinking' }
@@ -181,6 +184,164 @@
   let loading = $state(false)
   let error = $state('')
   let inputText = $state('')
+  /** Tracks all (name:args) combos executed this turn — prevents exact duplicate calls */
+  let executedCalls = new Set()
+  /** Tracks (name:args) combos that failed this turn — prevents retrying the same broken call */
+  let failedCalls = new Set()
+
+  // ── Streaming & abort ──────────────────────────────────────────────────────
+  /** Accumulates text for the currently-streaming assistant turn */
+  let streamingContent = $state('')
+  /** ID of the `streaming` ChatItem in `items` (null when not streaming) */
+  let streamingId = $state(/** @type {string | null} */ (null))
+  /** AbortController for the in-flight fetch; replaced each send() call */
+  let abortController = /** @type {AbortController | null} */ (null)
+
+  /** rAF handle for scroll debouncing during streaming */
+  let rafId = /** @type {number | null} */ (null)
+  /** Scroll to bottom on the next animation frame (throttled for streaming). */
+  function scrollBottomSoon() {
+    if (rafId !== null) return
+    rafId = requestAnimationFrame(() => {
+      rafId = null
+      if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+    })
+  }
+
+  function stop() {
+    abortController?.abort()
+  }
+
+  // ── Mermaid ───────────────────────────────────────────────────────────────
+  /** App :root defines --muted, --accent, --border which inherit into SVG and override
+   *  beautiful-mermaid's color-mix fallbacks — ER attributes/lines become illegible. */
+  const MERMAID_THEME = {
+    light: {
+      ...THEMES['zinc-light'],
+      muted: '#71717a',
+      line: '#a1a1aa',
+      accent: '#52525b',
+      border: '#d4d4d8',
+    },
+    dark: {
+      ...THEMES['zinc-dark'],
+      muted: '#a1a1aa',
+      line: '#71717a',
+      accent: '#d4d4d8',
+      border: '#52525b',
+    },
+  }
+
+  /** @param {SVGSVGElement} svg @param {typeof MERMAID_THEME.light} theme */
+  function applyMermaidThemeVars(svg, theme) {
+    svg.style.setProperty('--bg', theme.bg)
+    svg.style.setProperty('--fg', theme.fg)
+    if (theme.muted) svg.style.setProperty('--muted', theme.muted)
+    if (theme.line) svg.style.setProperty('--line', theme.line)
+    if (theme.accent) svg.style.setProperty('--accent', theme.accent)
+    if (theme.border) svg.style.setProperty('--border', theme.border)
+  }
+
+  /** @type {Map<string, string>} */
+  const mermaidCache = new Map()
+
+  /** Render mermaid code to SVG. Removes fixed dimensions so CSS controls sizing.
+   *  Diagram colors are set on the <svg> so app theme tokens cannot leak in. */
+  function processMermaidSvg(code) {
+    if (mermaidCache.has(code)) return /** @type {string} */ (mermaidCache.get(code))
+    try {
+      // Keep explicit SVG dimensions — compact diagrams stay small;
+      // CSS max-width:100% prevents overflow on wide ones.
+      const svg = renderMermaidSync(code, MERMAID_THEME.light)
+      mermaidCache.set(code, svg)
+      return svg
+    } catch (e) {
+      return `<pre class="text-xs text-destructive whitespace-pre-wrap">${String(e)}</pre>`
+    }
+  }
+
+  /** Svelte action: applies live dark/light theming + pan/zoom to the mermaid canvas.
+   *  Zoom: Ctrl/Meta + scroll (so regular chat scroll is never blocked).
+   *  Pan: drag. Reset: double-click. */
+  function mermaidInteractive(/** @type {HTMLDivElement} */ node) {
+    const svg = /** @type {SVGSVGElement|null} */ (node.querySelector('svg'))
+    if (!svg) return {}
+
+    // ── Theming ────────────────────────────────────────────────────────────
+    function applyTheme() {
+      const dark = document.documentElement.classList.contains('dark')
+      const theme = dark ? MERMAID_THEME.dark : MERMAID_THEME.light
+      applyMermaidThemeVars(svg, theme)
+      node.style.background = theme.bg
+    }
+    applyTheme()
+    const themeObs = new MutationObserver(applyTheme)
+    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+
+    // ── Pan / zoom ─────────────────────────────────────────────────────────
+    svg.style.transformOrigin = '0 0'
+    let scale = 1, tx = 0, ty = 0
+    let dragging = false, ox = 0, oy = 0
+
+    function applyTransform(animate = false) {
+      svg.style.transition = animate ? 'transform 0.25s ease' : ''
+      svg.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`
+    }
+
+    const onWheel = (/** @type {WheelEvent} */ e) => {
+      if (!e.ctrlKey && !e.metaKey) return   // regular scroll → let it bubble for chat scroll
+      e.preventDefault()
+      const { left, top } = node.getBoundingClientRect()
+      const mx = e.clientX - left, my = e.clientY - top
+      const factor = e.deltaY < 0 ? 1.12 : 0.89
+      const ns = Math.max(0.1, Math.min(10, scale * factor))
+      tx = mx - (mx - tx) * (ns / scale)
+      ty = my - (my - ty) * (ns / scale)
+      scale = ns
+      applyTransform()
+    }
+
+    const onDown = (/** @type {MouseEvent} */ e) => {
+      if (e.button !== 0) return
+      dragging = true
+      ox = e.clientX - tx; oy = e.clientY - ty
+      node.classList.add('is-dragging')
+    }
+
+    const onMove = (/** @type {MouseEvent} */ e) => {
+      if (!dragging) return
+      tx = e.clientX - ox; ty = e.clientY - oy
+      applyTransform()
+    }
+
+    const onUp = () => {
+      if (!dragging) return
+      dragging = false
+      node.classList.remove('is-dragging')
+    }
+
+    const onDblClick = () => {
+      scale = 1; tx = 0; ty = 0
+      applyTransform(true)
+    }
+
+    node.addEventListener('wheel', onWheel, { passive: false })
+    node.addEventListener('mousedown', onDown)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    node.addEventListener('dblclick', onDblClick)
+
+    return {
+      destroy() {
+        themeObs.disconnect()
+        node.removeEventListener('wheel', onWheel)
+        node.removeEventListener('mousedown', onDown)
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        node.removeEventListener('dblclick', onDblClick)
+      },
+    }
+  }
 
   /** @type {HTMLDivElement | null} */
   let scrollEl = $state(null)
@@ -279,10 +440,17 @@
   }
 
   /** @param {KeyboardEvent} e */
-  function handleKeydown(e) {
+  function handleKeydown(/** @type {KeyboardEvent} */ e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void send()
+      return
+    }
+    // Ctrl/Cmd + Backspace → clear the entire input
+    if (e.key === 'Backspace' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      inputText = ''
+      resetInputHeight()
     }
   }
 
@@ -301,13 +469,32 @@
     await scrollBottom()
 
     loading = true
+    abortController = new AbortController()
+    executedCalls = new Set()
+    failedCalls = new Set()
     try {
       await runAiTurn(0)
       await persistCurrent()
     } catch (e) {
-      error = String(e)
+      if (/** @type {any} */ (e)?.name !== 'AbortError') error = String(e)
     } finally {
-      items = items.filter((i) => i.id !== thinkingId)
+      // Finalize any in-progress streaming item (abort or error mid-stream)
+      if (streamingId) {
+        const partial = streamingContent.trim()
+        const sid = streamingId
+        items = items
+          .filter((i) => i.id !== thinkingId && i.kind !== 'executing')
+          .map((i) =>
+            i.id === sid
+              ? /** @type {ChatItem} */ ({ id: sid, kind: 'assistant', parts: parseAssistantMessage(partial || '…') })
+              : i,
+          )
+        streamingId = null
+        streamingContent = ''
+      } else {
+        items = items.filter((i) => i.id !== thinkingId && i.kind !== 'executing')
+      }
+      abortController = null
       loading = false
       await tick()
       inputRef?.focus()
@@ -316,42 +503,87 @@
 
   /** @param {number} depth */
   async function runAiTurn(depth) {
-    if (depth > 10) throw new Error('Too many tool-call iterations — possible loop')
+    if (depth > 40) throw new Error('Too many AI iterations — aborting runaway execution')
 
-    const response = await chatCompletionRaw(
+    let fullContent = ''
+    /** @type {import('$lib/ai.js').ToolCall[]} */
+    let toolCalls = []
+    /** ID of the streaming placeholder item created on first text token */
+    let itemId = /** @type {string | null} */ (null)
+
+    for await (const chunk of chatCompletionStream(
       settings,
       [{ role: 'system', content: systemPrompt }, ...apiHistory],
       AI_TOOLS,
-    )
+      abortController?.signal,
+    )) {
+      if (chunk.textDelta) {
+        fullContent += chunk.textDelta
+        if (!itemId) {
+          itemId = uid()
+          streamingId = itemId
+          // Remove the thinking indicator the moment the first token arrives
+          items = [
+            ...items.filter((i) => i.kind !== 'thinking'),
+            { id: itemId, kind: 'streaming' },
+          ]
+        }
+        streamingContent = fullContent
+        scrollBottomSoon()
+      }
+      if (chunk.toolCalls) {
+        toolCalls = chunk.toolCalls
+      }
+    }
 
-    if (response.toolCalls.length > 0) {
+    // Promote the streaming placeholder to a finalized assistant item
+    if (itemId) {
+      streamingId = null
+      streamingContent = ''
+      items = items.map((i) =>
+        i.id === itemId
+          ? /** @type {ChatItem} */ ({ id: itemId, kind: 'assistant', parts: parseAssistantMessage(fullContent) })
+          : i,
+      )
+    }
+
+    if (toolCalls.length > 0) {
       apiHistory = [
         ...apiHistory,
-        { role: 'assistant', content: response.content ?? null, tool_calls: response.toolCalls },
+        { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
       ]
-      if (response.content?.trim()) {
-        items = [
-          ...items,
-          { id: uid(), kind: 'assistant', parts: parseAssistantMessage(response.content) },
-        ]
-        await scrollBottom()
-      }
-      for (const call of response.toolCalls) {
+      for (const call of toolCalls) {
         await runToolCall(call)
       }
       await runAiTurn(depth + 1)
-    } else if (response.content) {
-      items = [
-        ...items,
-        { id: uid(), kind: 'assistant', parts: parseAssistantMessage(response.content) },
-      ]
-      apiHistory = [...apiHistory, { role: 'assistant', content: response.content }]
-      await scrollBottom()
+    } else if (fullContent) {
+      apiHistory = [...apiHistory, { role: 'assistant', content: fullContent }]
+      // Fallback: if no streaming item was created (non-streaming endpoint), add it now
+      if (!itemId) {
+        items = [
+          ...items,
+          { id: uid(), kind: 'assistant', parts: parseAssistantMessage(fullContent) },
+        ]
+        await scrollBottom()
+      }
     }
   }
 
   /** @param {import('$lib/ai.js').ToolCall} call */
   async function runToolCall(call) {
+    const callKey = `${call.function.name}:${call.function.arguments}`
+    if (executedCalls.has(callKey)) {
+      const toolResult = JSON.stringify({ error: 'Duplicate call — this exact operation already ran this turn. Use the previous result.' })
+      apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+      return
+    }
+    if (failedCalls.has(callKey)) {
+      const toolResult = JSON.stringify({ error: 'Repeated failed call — not retrying. Fix the query or explain the issue to the user.' })
+      apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+      return
+    }
+    executedCalls.add(callKey)
+
     let toolResult = ''
     try {
       const args = JSON.parse(call.function.arguments || '{}')
@@ -423,6 +655,8 @@
           table: `${schema}.${table}`,
           columns: rows.map((r) => ({ name: r[0], type: r[1], nullable: r[2] === 'YES', default: r[3] ?? null })),
         })
+      } else {
+        toolResult = JSON.stringify({ error: `Unknown tool: ${call.function.name}` })
       }
     } catch (e) {
       const msg = String(e)
@@ -434,6 +668,7 @@
       autoOpenResult(errId)
       await scrollBottom()
       toolResult = JSON.stringify({ error: msg })
+      failedCalls.add(callKey)
     }
     apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
   }
@@ -739,11 +974,38 @@
                     </span>
                   </div>
 
+                {:else if item.kind === 'streaming'}
+                  <div class="flex flex-col gap-2">
+                    <div class="prose-ai">
+                      {@html renderMd(streamingContent)}
+                      <span class="ml-px inline-block h-[0.85em] w-px translate-y-px animate-pulse bg-foreground/70 align-middle"></span>
+                    </div>
+                  </div>
+
                 {:else if item.kind === 'assistant'}
                   <div class="flex flex-col gap-2">
                     {#each item.parts as part, pi}
                       {#if part.type === 'text'}
                         <div class="prose-ai">{@html renderMd(part.content)}</div>
+                      {:else if part.type === 'mermaid'}
+                        <div class="mermaid-output overflow-hidden rounded-lg border border-border">
+                          <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/30 px-3 py-1.5">
+                            <span class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Diagram</span>
+                            <div class="flex items-center gap-2">
+                              <span class="hidden text-[10px] text-muted-foreground/40 sm:block">drag · Ctrl+scroll zoom · dbl-click reset</span>
+                              <button
+                                type="button"
+                                class="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                                onclick={() => copyText(part.content)}
+                              >
+                                <Copy class="size-2.5" />Source
+                              </button>
+                            </div>
+                          </div>
+                          <div class="mermaid-canvas" use:mermaidInteractive>
+                            {@html processMermaidSvg(part.content)}
+                          </div>
+                        </div>
                       {:else}
                         {@const sqlKey = `${item.id}-${pi}`}
                         {@const sqlOpen = !collapsed.has(sqlKey)}
@@ -895,25 +1157,29 @@
               value={inputText}
               oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput() }}
               onkeydown={handleKeydown}
-              disabled={loading || hasPendingConfirm}
+              disabled={hasPendingConfirm}
             ></textarea>
-            <button
-              type="button"
-              class="mb-1.5 mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
-              disabled={loading || hasPendingConfirm || !inputText.trim()}
-              onclick={() => void send()}
-              aria-label="Send"
-            >
-              {#if loading}
-                <span class="inline-flex gap-0.5">
-                  <span class="size-1 animate-bounce rounded-full bg-current" style="animation-delay:0ms"></span>
-                  <span class="size-1 animate-bounce rounded-full bg-current" style="animation-delay:120ms"></span>
-                  <span class="size-1 animate-bounce rounded-full bg-current" style="animation-delay:240ms"></span>
-                </span>
-              {:else}
+            {#if loading}
+              <button
+                type="button"
+                class="mb-1.5 mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground transition-opacity hover:opacity-80"
+                onclick={stop}
+                aria-label="Stop generating"
+                title="Stop generating"
+              >
+                <Square class="size-3 fill-current" />
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="mb-1.5 mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
+                disabled={hasPendingConfirm || !inputText.trim()}
+                onclick={() => void send()}
+                aria-label="Send"
+              >
                 <Send class="size-3.5" />
-              {/if}
-            </button>
+              </button>
+            {/if}
           </div>
           <p class="mt-1.5 text-[11px] text-muted-foreground/50">Enter to send · Shift+Enter new line · {modKey}+K command menu</p>
         </div>
@@ -956,10 +1222,12 @@
 
 <style>
   :global(.prose-ai) {
-    font-size: 0.875rem;
-    line-height: 1.65;
+    font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
     color: var(--foreground);
     word-break: break-word;
+    font-optical-sizing: auto;
   }
   :global(.prose-ai > *:first-child) { margin-top: 0; }
   :global(.prose-ai > *:last-child) { margin-bottom: 0; }
@@ -1038,4 +1306,29 @@
     text-decoration-color: var(--link);
   }
   :global(.prose-ai hr) { border: none; border-top: 1px solid var(--border); margin: 0.75rem 0; }
+
+  :global(.mermaid-canvas) {
+    cursor: grab;
+    overflow: hidden;
+    position: relative;
+    padding: 1rem;
+    /* background is set directly by the mermaidInteractive action */
+    background: #ffffff;
+    /* Block app :root tokens that collide with beautiful-mermaid variable names */
+    --muted: unset;
+    --accent: unset;
+    --border: unset;
+  }
+  :global(.mermaid-canvas.is-dragging) { cursor: grabbing; }
+
+  :global(.mermaid-canvas svg) {
+    display: block;
+    /* Respect the SVG's natural size; shrink only if wider than the container */
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    transform-origin: 0 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
 </style>

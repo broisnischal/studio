@@ -2,7 +2,7 @@
  * @typedef {{ role: 'system'|'user'|'assistant'|'tool', content: string|null, tool_calls?: ToolCall[], tool_call_id?: string }} ApiMessage
  * @typedef {{ id: string, type: 'function', function: { name: string, arguments: string } }} ToolCall
  * @typedef {{ baseUrl: string, apiKey: string, model: string }} AiSettings
- * @typedef {{ type: 'text', content: string } | { type: 'sql', content: string }} AssistantPart
+ * @typedef {{ type: 'text', content: string } | { type: 'sql', content: string } | { type: 'mermaid', content: string }} AssistantPart
  */
 
 /** OpenAI-compatible tool definitions — work with Mistral, OpenAI, recent Ollama models. */
@@ -87,6 +87,94 @@ export async function chatCompletionRaw(settings, messages, tools = null) {
   }
 }
 
+/**
+ * Stream an OpenAI-compatible chat completion via SSE.
+ * Yields `{ textDelta }` as tokens arrive, then `{ toolCalls }` once the stream closes.
+ * Throws on HTTP errors; throws AbortError when the signal fires.
+ * @param {AiSettings} settings
+ * @param {ApiMessage[]} messages
+ * @param {unknown[] | null} tools
+ * @param {AbortSignal} [signal]
+ * @returns {AsyncGenerator<{ textDelta?: string, toolCalls?: ToolCall[] }>}
+ */
+export async function* chatCompletionStream(settings, messages, tools = null, signal) {
+  const base = settings.baseUrl.replace(/\/+$/, '')
+  const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
+
+  /** @type {Record<string, unknown>} */
+  const body = { model: settings.model, messages, stream: true }
+  if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+    },
+    body: JSON.stringify(body),
+    signal,
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`AI API ${res.status}: ${text.slice(0, 400)}`)
+  }
+  if (!res.body) throw new Error('No response body')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  /** @type {Map<number, { id: string, name: string, args: string }>} */
+  const tcAcc = new Map()
+  let buf = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const t = line.trim()
+        if (!t || t === 'data: [DONE]') continue
+        if (!t.startsWith('data: ')) continue
+        /** @type {any} */
+        let chunk
+        try { chunk = JSON.parse(t.slice(6)) } catch { continue }
+        const delta = chunk.choices?.[0]?.delta
+        if (!delta) continue
+        if (delta.content) yield { textDelta: delta.content }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0
+            if (!tcAcc.has(idx)) tcAcc.set(idx, { id: '', name: '', args: '' })
+            const acc = /** @type {{ id: string, name: string, args: string }} */ (tcAcc.get(idx))
+            if (tc.id) acc.id = tc.id
+            if (tc.function?.name) acc.name += tc.function.name
+            if (tc.function?.arguments) acc.args += tc.function.arguments
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  if (tcAcc.size > 0) {
+    yield {
+      toolCalls: /** @type {ToolCall[]} */ (
+        [...tcAcc.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, { id, name, args }]) => ({
+            id: id || `call_${Math.random().toString(36).slice(2, 9)}`,
+            type: 'function',
+            function: { name, arguments: args },
+          }))
+      ),
+    }
+  }
+}
+
 /** Statements that permanently destroy or modify data — require user confirmation. */
 const DESTRUCTIVE_RE = /^\s*(DELETE\b|DROP\b|TRUNCATE\b)/i
 
@@ -103,7 +191,7 @@ export function isDestructiveSql(sql) {
 export function parseAssistantMessage(content) {
   /** @type {AssistantPart[]} */
   const parts = []
-  const regex = /```(?:sql|SQL)?\s*([\s\S]*?)```/g
+  const regex = /```(\w*)\n?([\s\S]*?)```/g
   let lastIdx = 0
   let match
   while ((match = regex.exec(content)) !== null) {
@@ -111,8 +199,15 @@ export function parseAssistantMessage(content) {
       const text = content.slice(lastIdx, match.index).trim()
       if (text) parts.push({ type: 'text', content: text })
     }
-    const sql = match[1].trim()
-    if (sql) parts.push({ type: 'sql', content: sql })
+    const lang = match[1].toLowerCase()
+    const code = match[2].trim()
+    if (code) {
+      if (lang === 'mermaid') {
+        parts.push({ type: 'mermaid', content: code })
+      } else {
+        parts.push({ type: 'sql', content: code })
+      }
+    }
     lastIdx = match.index + match[0].length
   }
   const tail = content.slice(lastIdx).trim()
@@ -181,6 +276,26 @@ ${activeTableSection}
 4. For destructive SQL (DELETE / DROP / TRUNCATE): explain what will change, then execute. The user will be prompted to confirm before it runs.
 5. If a query returns no rows, say so clearly and suggest alternatives.
 6. Prefer CTEs over subqueries for readability. Always add LIMIT for exploratory SELECTs.
+7. If a tool call returns an error, do NOT retry the exact same query. Analyze the error, produce a corrected query, or explain to the user why it cannot be done.
+8. To visualize data or structure, output a \`\`\`mermaid code block — it will be rendered as an interactive diagram. Use \`erDiagram\` for entity-relationship / schema diagrams, \`flowchart TD\` for process flows, and \`xychart-beta\` for bar/line charts.
+9. For ERD / schema diagrams, fetch all column and FK data in two \`execute_sql\` calls rather than calling \`describe_table\` per table:
+\`\`\`sql
+-- All columns
+SELECT table_name, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = '<schema>'
+ORDER BY table_name, ordinal_position;
+
+-- All foreign keys
+SELECT kcu.table_name, kcu.column_name,
+       ccu.table_name AS ref_table, ccu.column_name AS ref_col
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+     ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema
+JOIN information_schema.constraint_column_usage ccu
+     ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema
+WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.constraint_schema = '<schema>';
+\`\`\`
 
 ---
 
