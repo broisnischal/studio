@@ -127,27 +127,30 @@ async fn fetch_foreign_keys(
     schema: &str,
     table: &str,
 ) -> Result<Vec<ForeignKeyInfo>, String> {
+    // Use pg_catalog directly: information_schema.constraint_column_usage has privilege quirks
+    // and produces a cross-product for composite FKs. pg_constraint with LATERAL unnest
+    // preserves positional pairing between local and referenced columns.
     let rows = sqlx::query(
         r#"
         SELECT
-            tc.constraint_name::text,
-            kcu.column_name::text,
-            ccu.table_schema::text,
-            ccu.table_name::text,
-            ccu.column_name::text,
-            kcu.ordinal_position
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_schema = kcu.constraint_schema
-         AND tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.constraint_column_usage ccu
-          ON ccu.constraint_schema = tc.constraint_schema
-         AND ccu.constraint_name = tc.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_schema = $1
-          AND tc.table_name = $2
-        ORDER BY tc.constraint_name, kcu.ordinal_position
+            c.conname::text,
+            a.attname::text,
+            fn.nspname::text,
+            f.relname::text,
+            fa.attname::text
+        FROM pg_constraint c
+        JOIN pg_class t  ON t.oid = c.conrelid
+        JOIN pg_namespace n  ON n.oid = t.relnamespace
+        JOIN pg_class f  ON f.oid = c.confrelid
+        JOIN pg_namespace fn ON fn.oid = f.relnamespace
+        JOIN LATERAL unnest(c.conkey)  WITH ORDINALITY AS pos(attnum, ord) ON true
+        JOIN pg_attribute a  ON a.attrelid = t.oid AND a.attnum = pos.attnum
+        JOIN LATERAL unnest(c.confkey) WITH ORDINALITY AS fpos(attnum, ord) ON pos.ord = fpos.ord
+        JOIN pg_attribute fa ON fa.attrelid = f.oid AND fa.attnum = fpos.attnum
+        WHERE c.contype = 'f'
+          AND n.nspname = $1
+          AND t.relname = $2
+        ORDER BY c.conname, pos.ord
         "#,
     )
     .bind(schema)
