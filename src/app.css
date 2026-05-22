@@ -114,9 +114,11 @@
     font-size: var(--app-font-size);
     font-family: var(--font-sans);
     @apply h-full antialiased;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    /* optimizeLegibility causes blurry text during GPU-composited scroll in
+       WebKit / WebView2 — the software rasterizer it enables doesn't align
+       cleanly with compositor layer boundaries when rows scroll past the
+       sticky header. 'geometricPrecision' keeps crisp rendering without it. */
+    text-rendering: geometricPrecision;
   }
 
   body {

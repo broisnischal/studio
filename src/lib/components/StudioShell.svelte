@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { toast } from 'svelte-sonner'
@@ -23,6 +24,7 @@
     executeSql,
     updateTableCell,
     deleteTableRows,
+    toggleDevtools,
   } from '$lib/api.js'
   import {
     createTableTab,
@@ -52,6 +54,17 @@
   } from '$lib/foreign-key-nav.js'
   import { loadLayout, saveLayout } from '$lib/stores/layout.js'
   import {
+    getLastConnection,
+    loadSavedConnections,
+    setLastConnectionId,
+    upsertConnection,
+  } from '$lib/stores/connections.js'
+  import {
+    connectPostgres,
+    connectSqlite,
+    connectD1,
+  } from '$lib/api.js'
+  import {
     remapNullableRowIndex,
     remapRowIndexSet,
   } from '$lib/table-row-indices.js'
@@ -66,7 +79,9 @@
   const SEARCH_DEBOUNCE_MS = 300
 
   let connection = $state(null)
-  let showConnectionModal = $state(true)
+  let autoConnecting = $state(false)
+  let showConnectionModal = $state(false)
+  let savedConnections = $state(loadSavedConnections())
   let showSettingsModal = $state(false)
   let showShortcutsModal = $state(false)
   let commandOpen = $state(false)
@@ -147,6 +162,17 @@
   const connectionId = $derived(
     connection
       ? `${connection.host}:${connection.port}/${connection.database}@${connection.user}`
+      : '',
+  )
+
+  // ID of the currently-active saved connection (for highlighting in the palette)
+  const activeConnectionId = $derived(
+    connection
+      ? (savedConnections.find((c) => {
+          if (c.type === 'sqlite') return c.filePath === connection.filePath
+          if (c.type === 'd1') return c.databaseId === connection.databaseId && c.accountId === connection.accountId
+          return c.host === connection.host && c.database === connection.database && c.user === connection.user
+        })?.id ?? '')
       : '',
   )
 
@@ -305,6 +331,10 @@
       }
     }
   }
+
+  // F12 or Ctrl/Cmd+Shift+I → toggle DevTools (no-op in release builds)
+  createHotkey('F12', (e) => { e.preventDefault(); void toggleDevtools() })
+  createHotkey('Mod+Shift+I', (e) => { e.preventDefault(); void toggleDevtools() })
 
   createHotkey('Mod+K', (e) => {
     e.preventDefault()
@@ -797,8 +827,14 @@
     }
   }
 
-  async function onConnected(conn) {
+  async function onConnected(conn, savedId) {
     connection = conn
+    savedConnections = loadSavedConnections()
+    // Persist last-used ID and bump timestamp
+    if (savedId) {
+      setLastConnectionId(savedId)
+      upsertConnection({ ...conn, id: savedId, lastConnectedAt: Date.now() })
+    }
     tableFilter = ''
     error = ''
     activeTable = null
@@ -814,6 +850,22 @@
       openWelcomeTab()
     }
   }
+
+  onMount(async () => {
+    const last = getLastConnection()
+    if (!last) { showConnectionModal = true; return }
+    autoConnecting = true
+    try {
+      if (last.type === 'sqlite') await connectSqlite(last)
+      else if (last.type === 'd1') await connectD1(last)
+      else await connectPostgres(last)
+      await onConnected(last, last.id)
+    } catch {
+      showConnectionModal = true
+    } finally {
+      autoConnecting = false
+    }
+  })
 
   async function handleSchemaChange(schema) {
     if (!schema || schema === activeSchema) return
@@ -852,6 +904,29 @@
     tableFilter = ''
     resetTabs()
     showConnectionModal = true
+  }
+
+  /** @param {import('$lib/stores/connections.js').SavedConnection} conn */
+  async function handleSwitchDatabase(conn) {
+    // Disconnect current (best-effort, non-blocking)
+    disconnectPostgres().catch(() => {})
+    connection = null
+    schemas = []; tables = []; activeSchema = 'public'; activeTable = null; tableFilter = ''
+    resetTabs()
+    // Connect to the chosen saved connection
+    autoConnecting = true
+    try {
+      const { connectPostgres, connectSqlite, connectD1 } = await import('$lib/api.js')
+      if (conn.type === 'sqlite') await connectSqlite(conn)
+      else if (conn.type === 'd1') await connectD1(conn)
+      else await connectPostgres(conn)
+      await onConnected(conn, conn.id)
+    } catch (e) {
+      error = String(e)
+      showConnectionModal = true
+    } finally {
+      autoConnecting = false
+    }
   }
 
   async function handleRefresh() {
@@ -1018,7 +1093,7 @@
   }
 </script>
 
-<ConnectionModal bind:open={showConnectionModal} onconnected={onConnected} />
+<ConnectionModal bind:open={showConnectionModal} onconnected={(conn, id) => onConnected(conn, id)} />
 
 <SettingsDialog bind:open={showSettingsModal} />
 
@@ -1030,6 +1105,8 @@
   {schemas}
   {tables}
   {activeSchema}
+  {savedConnections}
+  {activeConnectionId}
   ontableselect={handleTableSelect}
   onschemachange={handleSchemaChange}
   onopensql={() => void focusSqlView()}
@@ -1040,7 +1117,21 @@
   onrefresh={handleRefresh}
   onopenai={() => openAiTab()}
   onopenshortcuts={() => (showShortcutsModal = true)}
+  onswitchdatabase={handleSwitchDatabase}
 />
+
+{#if autoConnecting}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+    <div class="flex flex-col items-center gap-3 text-muted-foreground">
+      <span class="inline-flex gap-1">
+        <span class="size-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay:0ms"></span>
+        <span class="size-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay:150ms"></span>
+        <span class="size-2 animate-bounce rounded-full bg-muted-foreground" style="animation-delay:300ms"></span>
+      </span>
+      <p class="text-sm">Reconnecting…</p>
+    </div>
+  </div>
+{/if}
 
 <div class="flex h-full min-h-0 w-full overflow-hidden bg-background">
   {#if sidebarOpen}

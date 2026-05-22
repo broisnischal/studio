@@ -1,12 +1,31 @@
+/// Toggle the WebView developer tools. Only functional in debug builds;
+/// in release builds this is a no-op so the command stays safe to expose.
+#[tauri::command]
+pub fn toggle_devtools(window: tauri::WebviewWindow) {
+    #[cfg(debug_assertions)]
+    {
+        if window.is_devtools_open() {
+            window.close_devtools();
+        } else {
+            window.open_devtools();
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = window;
+}
+
 use crate::db::{
-    connect, disconnect, delete_table_row, delete_table_rows, execute_sql, get_table_rows,
-    list_schemas, list_tables, test_connection, update_table_cell, ConnectionConfig, SqlResult,
-    TableInfo, TableRows,
+    connect, connect_d1, connect_sqlite, disconnect,
+    delete_table_row, delete_table_rows, execute_sql, get_table_rows,
+    list_schemas, list_tables, test_connection, test_d1_connection, test_sqlite_connection,
+    update_table_cell, ConnectionConfig, D1Config, DbState, SqlResult, SqliteConfig, TableInfo,
+    TableRows,
 };
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::db::DbState;
 use tauri::State;
+
+// ── PostgreSQL ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn test_postgres_connection(config: ConnectionConfig) -> Result<(), String> {
@@ -21,10 +40,44 @@ pub async fn connect_postgres(
     connect(state, config).await
 }
 
+// ── SQLite ────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn test_sqlite(config: SqliteConfig) -> Result<(), String> {
+    test_sqlite_connection(config).await
+}
+
+#[tauri::command]
+pub async fn connect_sqlite_db(
+    state: State<'_, DbState>,
+    config: SqliteConfig,
+) -> Result<(), String> {
+    connect_sqlite(state, config).await
+}
+
+// ── Cloudflare D1 ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn test_d1(config: D1Config) -> Result<(), String> {
+    test_d1_connection(config).await
+}
+
+#[tauri::command]
+pub async fn connect_d1_db(
+    state: State<'_, DbState>,
+    config: D1Config,
+) -> Result<(), String> {
+    connect_d1(state, config).await
+}
+
+// ── Shared disconnect ────────────────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn disconnect_postgres(state: State<'_, DbState>) -> Result<(), String> {
     disconnect(state).await
 }
+
+// ── DB-agnostic query commands ────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn pg_list_schemas(state: State<'_, DbState>) -> Result<Vec<String>, String> {

@@ -1,6 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
 
-/** @typedef {{ name: string, host: string, port: number, database: string, user: string, password: string, ssl: boolean }} ConnectionConfig */
+/** @typedef {{ name: string, host: string, port: number, database: string, user: string, password: string, ssl: boolean }} PgConnectionConfig */
+/** @typedef {{ name: string, filePath: string }} SqliteConnectionConfig */
+/** @typedef {{ name: string, accountId: string, databaseId: string, apiToken: string }} D1ConnectionConfig */
+/** @typedef {PgConnectionConfig} ConnectionConfig */
 
 /** @param {Record<string, unknown>} raw */
 export function normalizeConnectionConfig(raw) {
@@ -24,29 +27,57 @@ function formatInvokeError(err) {
   return msg
 }
 
-/** @param {Record<string, unknown>} config */
-async function invokeConfig(command, config) {
+async function inv(command, args = {}) {
   try {
-    return await invoke(command, { config: normalizeConnectionConfig(config) })
+    return await invoke(command, args)
   } catch (err) {
     throw new Error(formatInvokeError(err))
   }
 }
 
+// ── PostgreSQL ────────────────────────────────────────────────────────────────
+
 export async function testPostgresConnection(config) {
-  return invokeConfig('test_postgres_connection', config)
+  return inv('test_postgres_connection', { config: normalizeConnectionConfig(config) })
 }
 
 export async function connectPostgres(config) {
-  return invokeConfig('connect_postgres', config)
+  return inv('connect_postgres', { config: normalizeConnectionConfig(config) })
 }
 
+/** Toggle the WebView DevTools (no-op in release builds). */
+export async function toggleDevtools() {
+  return inv('toggle_devtools')
+}
+
+// ── SQLite ────────────────────────────────────────────────────────────────────
+
+/** @param {{ name: string, filePath: string }} config */
+export async function testSqliteConnection(config) {
+  return inv('test_sqlite', { config: { name: String(config.name || 'SQLite'), filePath: String(config.filePath || '') } })
+}
+
+/** @param {{ name: string, filePath: string }} config */
+export async function connectSqlite(config) {
+  return inv('connect_sqlite_db', { config: { name: String(config.name || 'SQLite'), filePath: String(config.filePath || '') } })
+}
+
+// ── Cloudflare D1 ─────────────────────────────────────────────────────────────
+
+/** @param {{ name: string, accountId: string, databaseId: string, apiToken: string }} config */
+export async function testD1Connection(config) {
+  return inv('test_d1', { config })
+}
+
+/** @param {{ name: string, accountId: string, databaseId: string, apiToken: string }} config */
+export async function connectD1(config) {
+  return inv('connect_d1_db', { config })
+}
+
+// ── Shared disconnect ─────────────────────────────────────────────────────────
+
 export async function disconnectPostgres() {
-  try {
-    return await invoke('disconnect_postgres')
-  } catch (err) {
-    throw new Error(formatInvokeError(err))
-  }
+  return inv('disconnect_postgres')
 }
 
 export async function listSchemas() {

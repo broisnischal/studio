@@ -1,4 +1,4 @@
-use super::connection::{require_pool, DbState};
+use super::connection::{require_conn, require_pool, ActiveConnection, DbState};
 use super::schema::validate_ident;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use rust_decimal::Decimal;
@@ -505,6 +505,17 @@ pub async fn get_table_rows(
     sort_direction: Option<String>,
     filters: Option<Vec<RowFilter>>,
 ) -> Result<TableRows, String> {
+    match require_conn(&state)? {
+        ActiveConnection::Sqlite(pool) => {
+            return super::sqlite::get_table_rows(
+                &pool, &table, limit, offset, search, sort_column, sort_direction, filters,
+            ).await;
+        }
+        ActiveConnection::D1(cfg) => {
+            return get_table_rows_d1(&cfg, &table, limit, offset, search, sort_column, sort_direction, filters).await;
+        }
+        ActiveConnection::Postgres(_) => {}
+    }
     let pool = require_pool(&state)?;
     let started = std::time::Instant::now();
 
@@ -610,6 +621,15 @@ pub async fn update_table_cell(
     column: String,
     value: Value,
 ) -> Result<(), String> {
+    match require_conn(&state)? {
+        ActiveConnection::Sqlite(pool) => {
+            return super::sqlite::update_table_cell(&pool, &table, primary_key, &column, &value).await;
+        }
+        ActiveConnection::D1(cfg) => {
+            return update_table_cell_d1(&cfg, &table, primary_key, &column, &value).await;
+        }
+        ActiveConnection::Postgres(_) => {}
+    }
     let pool = require_pool(&state)?;
 
     if primary_key.is_empty() {
@@ -711,6 +731,15 @@ pub async fn delete_table_rows(
     table: String,
     primary_keys: Vec<HashMap<String, Value>>,
 ) -> Result<u64, String> {
+    match require_conn(&state)? {
+        ActiveConnection::Sqlite(pool) => {
+            return super::sqlite::delete_table_rows(&pool, &table, primary_keys).await;
+        }
+        ActiveConnection::D1(cfg) => {
+            return delete_table_rows_d1(&cfg, &table, primary_keys).await;
+        }
+        ActiveConnection::Postgres(_) => {}
+    }
     let pool = require_pool(&state)?;
 
     if primary_keys.is_empty() {
@@ -887,18 +916,24 @@ fn is_row_returning_sql(sql: &str) -> bool {
 }
 
 pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlResult, String> {
-    let pool = require_pool(&state)?;
-    let sql = sql.trim();
-    if sql.is_empty() {
+    let sql_str = sql.trim();
+    if sql_str.is_empty() {
         return Err("Query is empty".into());
     }
+    match require_conn(&state)? {
+        ActiveConnection::Postgres(pool) => execute_sql_pg(&pool, sql_str).await,
+        ActiveConnection::Sqlite(pool) => super::sqlite::execute_sql(&pool, sql_str).await,
+        ActiveConnection::D1(cfg) => super::d1::query(&cfg, sql_str, vec![]).await,
+    }
+}
 
+async fn execute_sql_pg(pool: &sqlx::PgPool, sql: &str) -> Result<SqlResult, String> {
     let started = std::time::Instant::now();
     let query_ms = || started.elapsed().as_millis() as u64;
 
     if is_row_returning_sql(sql) {
         let rows = sqlx::query(sql)
-            .fetch_all(&pool)
+            .fetch_all(pool)
             .await
             .map_err(|e| format!("Query failed: {e}"))?;
 
@@ -914,12 +949,10 @@ pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlRe
         } else {
             vec![]
         };
-
         let data: Vec<Vec<Value>> = rows
             .iter()
             .map(|row| (0..row.len()).map(|i| cell_to_json(row, i)).collect())
             .collect();
-
         let row_count = data.len() as i64;
         return Ok(SqlResult {
             columns,
@@ -931,10 +964,9 @@ pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlRe
     }
 
     let result = sqlx::query(sql)
-        .execute(&pool)
+        .execute(pool)
         .await
         .map_err(|e| format!("Statement failed: {e}"))?;
-
     let affected = result.rows_affected() as i64;
     Ok(SqlResult {
         columns: vec![],
@@ -943,4 +975,182 @@ pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlRe
         message: Some(format!("{affected} row(s) affected")),
         query_ms: query_ms(),
     })
+}
+
+// ── D1 helpers (thin wrappers that build SQLite-compatible SQL) ───────────────
+
+async fn get_table_rows_d1(
+    cfg: &super::connection::D1Config,
+    table: &str,
+    limit: i64,
+    offset: i64,
+    search: Option<String>,
+    sort_column: Option<String>,
+    sort_direction: Option<String>,
+    filters: Option<Vec<RowFilter>>,
+) -> Result<TableRows, String> {
+    use super::d1::query as d1q;
+
+    let t0 = std::time::Instant::now();
+    let tq = format!("\"{}\"", table.replace('"', "\"\""));
+
+    // Column names from PRAGMA
+    let pragma = d1q(cfg, &format!("PRAGMA table_info({tq})"), vec![]).await?;
+    let name_idx = pragma.columns.iter().position(|c| c.name == "name").unwrap_or(1);
+    let pk_idx = pragma.columns.iter().position(|c| c.name == "pk").unwrap_or(5);
+    let fk_res = d1q(cfg, &format!("PRAGMA foreign_key_list({tq})"), vec![]).await?;
+
+    let col_names: Vec<String> = pragma.rows.iter()
+        .filter_map(|r| r.get(name_idx)?.as_str().map(|s| s.to_string()))
+        .collect();
+
+    let mut pk: Vec<(i64, String)> = pragma.rows.iter().filter_map(|r| {
+        let pos = r.get(pk_idx)?.as_i64().unwrap_or(0);
+        if pos == 0 { return None; }
+        let n = r.get(name_idx)?.as_str()?.to_string();
+        Some((pos, n))
+    }).collect();
+    pk.sort_by_key(|(p, _)| *p);
+    let primary_key: Vec<String> = pk.into_iter().map(|(_, n)| n).collect();
+
+    // FK grouping
+    let mut fk_map: std::collections::BTreeMap<i64, ForeignKeyInfo> = Default::default();
+    if let (Some(id_col), Some(tbl_col), Some(from_col), Some(to_col)) = (
+        fk_res.columns.iter().position(|c| c.name == "id"),
+        fk_res.columns.iter().position(|c| c.name == "table"),
+        fk_res.columns.iter().position(|c| c.name == "from"),
+        fk_res.columns.iter().position(|c| c.name == "to"),
+    ) {
+        for r in &fk_res.rows {
+            let id = r.get(id_col).and_then(|v| v.as_i64()).unwrap_or(0);
+            let ref_tbl = r.get(tbl_col).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let from = r.get(from_col).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let to = r.get(to_col).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let e = fk_map.entry(id).or_insert(ForeignKeyInfo {
+                columns: vec![], referenced_schema: "main".to_string(),
+                referenced_table: ref_tbl, referenced_columns: vec![],
+            });
+            e.columns.push(from);
+            e.referenced_columns.push(to);
+        }
+    }
+    let foreign_keys: Vec<ForeignKeyInfo> = fk_map.into_values().collect();
+
+    // WHERE
+    let mut conditions: Vec<String> = vec![];
+    let mut params: Vec<Value> = vec![];
+    if let Some(ref s) = search {
+        if !s.is_empty() && !col_names.is_empty() {
+            let parts: Vec<String> = col_names.iter()
+                .map(|c| format!("LOWER(CAST(\"{}\" AS TEXT)) LIKE LOWER(?)", c.replace('"', "\"\"")))
+                .collect();
+            conditions.push(format!("({})", parts.join(" OR ")));
+            for _ in &col_names { params.push(Value::String(format!("%{s}%"))); }
+        }
+    }
+    if let Some(ref fs) = filters {
+        for f in fs {
+            let qcol = format!("\"{}\"", f.column.replace('"', "\"\""));
+            match f.op.as_str() {
+                "is_null" => conditions.push(format!("{qcol} IS NULL")),
+                "is_not_null" => conditions.push(format!("{qcol} IS NOT NULL")),
+                _ => if let Some(ref v) = f.value {
+                    let (cond, bp) = super::sqlite::build_d1_filter(&qcol, &f.op, v);
+                    conditions.push(cond);
+                    params.extend(bp);
+                },
+            }
+        }
+    }
+    let where_clause = if conditions.is_empty() { String::new() }
+                       else { format!("WHERE {}", conditions.join(" AND ")) };
+
+    let order_clause = if let Some(col) = sort_column {
+        let dir = match sort_direction.as_deref() { Some("desc") => "DESC", _ => "ASC" };
+        format!("ORDER BY \"{}\" {dir}", col.replace('"', "\"\""))
+    } else { String::new() };
+
+    let count_sql = format!("SELECT COUNT(*) FROM {tq} {where_clause}");
+    let count_res = d1q(cfg, &count_sql, params.clone()).await?;
+    let total = count_res.rows.first().and_then(|r| r.first()).and_then(|v| v.as_i64()).unwrap_or(0);
+
+    let rows_sql = format!("SELECT * FROM {tq} {where_clause} {order_clause} LIMIT ? OFFSET ?");
+    let mut row_params = params;
+    row_params.push(Value::Number(limit.into()));
+    row_params.push(Value::Number(offset.into()));
+    let rows_res = d1q(cfg, &rows_sql, row_params).await?;
+
+    Ok(TableRows {
+        columns: rows_res.columns,
+        rows: rows_res.rows,
+        total,
+        query_ms: t0.elapsed().as_millis() as u64,
+        primary_key,
+        foreign_keys,
+    })
+}
+
+async fn update_table_cell_d1(
+    cfg: &super::connection::D1Config,
+    table: &str,
+    primary_key: HashMap<String, Value>,
+    column: &str,
+    value: &Value,
+) -> Result<(), String> {
+    use super::d1::query as d1q;
+
+    let pragma = d1q(cfg, &format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\"")), vec![]).await?;
+    let name_idx = pragma.columns.iter().position(|c| c.name == "name").unwrap_or(1);
+    let pk_idx   = pragma.columns.iter().position(|c| c.name == "pk").unwrap_or(5);
+    let mut pk: Vec<(i64, String)> = pragma.rows.iter().filter_map(|r| {
+        let pos = r.get(pk_idx)?.as_i64().unwrap_or(0);
+        if pos == 0 { return None; }
+        Some((pos, r.get(name_idx)?.as_str()?.to_string()))
+    }).collect();
+    pk.sort_by_key(|(p, _)| *p);
+    if pk.is_empty() { return Err("Cannot update row: table has no primary key".into()); }
+
+    let tq = format!("\"{}\"", table.replace('"', "\"\""));
+    let set_col = format!("\"{}\"", column.replace('"', "\"\""));
+    let where_parts: Vec<String> = pk.iter().map(|(_, c)| format!("\"{}\" = ?", c.replace('"', "\"\""))).collect();
+    let sql = format!("UPDATE {tq} SET {set_col} = ? WHERE {}", where_parts.join(" AND "));
+
+    let mut params = vec![value.clone()];
+    for (_, col) in &pk {
+        params.push(primary_key.get(col).cloned().unwrap_or(Value::Null));
+    }
+    d1q(cfg, &sql, params).await?;
+    Ok(())
+}
+
+async fn delete_table_rows_d1(
+    cfg: &super::connection::D1Config,
+    table: &str,
+    primary_keys: Vec<HashMap<String, Value>>,
+) -> Result<u64, String> {
+    use super::d1::query as d1q;
+    if primary_keys.is_empty() { return Ok(0); }
+
+    let pragma = d1q(cfg, &format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\"")), vec![]).await?;
+    let name_idx = pragma.columns.iter().position(|c| c.name == "name").unwrap_or(1);
+    let pk_idx   = pragma.columns.iter().position(|c| c.name == "pk").unwrap_or(5);
+    let mut pk: Vec<(i64, String)> = pragma.rows.iter().filter_map(|r| {
+        let pos = r.get(pk_idx)?.as_i64().unwrap_or(0);
+        if pos == 0 { return None; }
+        Some((pos, r.get(name_idx)?.as_str()?.to_string()))
+    }).collect();
+    pk.sort_by_key(|(p, _)| *p);
+    if pk.is_empty() { return Err("Cannot delete rows: table has no primary key".into()); }
+
+    let tq = format!("\"{}\"", table.replace('"', "\"\""));
+    let where_parts: Vec<String> = pk.iter().map(|(_, c)| format!("\"{}\" = ?", c.replace('"', "\"\""))).collect();
+    let sql = format!("DELETE FROM {tq} WHERE {}", where_parts.join(" AND "));
+
+    let mut total = 0u64;
+    for pk_map in primary_keys {
+        let params: Vec<Value> = pk.iter().map(|(_, c)| pk_map.get(c).cloned().unwrap_or(Value::Null)).collect();
+        let res = d1q(cfg, &sql, params).await?;
+        total += res.row_count.unwrap_or(0).max(0) as u64;
+    }
+    Ok(total)
 }

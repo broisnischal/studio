@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{PgPool, SqlitePool};
 use std::sync::Mutex;
 use tauri::State;
 
+// ── PostgreSQL ────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectionConfig {
+pub struct PgConfig {
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -16,7 +19,7 @@ pub struct ConnectionConfig {
     pub ssl: bool,
 }
 
-impl ConnectionConfig {
+impl PgConfig {
     pub fn connection_url(&self) -> String {
         let ssl = if self.ssl { "?sslmode=require" } else { "" };
         format!(
@@ -31,21 +34,107 @@ impl ConnectionConfig {
     }
 }
 
-pub struct DbState {
-    pub pool: Mutex<Option<PgPool>>,
-    pub config: Mutex<Option<ConnectionConfig>>,
+/// Kept for backward-compat with all existing code that uses `ConnectionConfig`.
+pub type ConnectionConfig = PgConfig;
+
+// ── SQLite ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteConfig {
+    pub name: String,
+    /// Absolute file path, or `:memory:` for an in-memory database.
+    pub file_path: String,
 }
 
-impl Default for DbState {
-    fn default() -> Self {
-        Self {
-            pool: Mutex::new(None),
-            config: Mutex::new(None),
+// ── Cloudflare D1 ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct D1Config {
+    pub name: String,
+    pub account_id: String,
+    pub database_id: String,
+    pub api_token: String,
+}
+
+// ── Active connection ─────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub enum ActiveConnection {
+    Postgres(PgPool),
+    Sqlite(SqlitePool),
+    D1(D1Config),
+}
+
+impl ActiveConnection {
+    pub fn driver(&self) -> &'static str {
+        match self {
+            Self::Postgres(_) => "postgres",
+            Self::Sqlite(_) => "sqlite",
+            Self::D1(_) => "d1",
         }
     }
 }
 
-async fn open_pool(config: &ConnectionConfig) -> Result<PgPool, String> {
+// ── DbState ───────────────────────────────────────────────────────────────────
+
+pub struct DbState {
+    pub conn: Mutex<Option<ActiveConnection>>,
+}
+
+impl Default for DbState {
+    fn default() -> Self {
+        Self { conn: Mutex::new(None) }
+    }
+}
+
+/// Returns a clone of the active connection, or an error if disconnected.
+pub fn require_conn(state: &State<'_, DbState>) -> Result<ActiveConnection, String> {
+    state
+        .conn
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to a database".to_string())
+}
+
+/// Convenience helper kept for all existing PostgreSQL-specific code.
+pub fn require_pool(state: &State<'_, DbState>) -> Result<PgPool, String> {
+    match require_conn(state)? {
+        ActiveConnection::Postgres(pool) => Ok(pool),
+        other => Err(format!(
+            "Expected a PostgreSQL connection, got {}",
+            other.driver()
+        )),
+    }
+}
+
+fn set_conn(state: &State<'_, DbState>, conn: Option<ActiveConnection>) -> Result<(), String> {
+    *state.conn.lock().map_err(|e| e.to_string())? = conn;
+    Ok(())
+}
+
+async fn close_existing(state: &State<'_, DbState>) {
+    let old = state.conn.lock().ok().and_then(|mut g| g.take());
+    let timeout = std::time::Duration::from_secs(3);
+    match old {
+        // PgPool::close() waits for every connection to be returned to the pool.
+        // A stalled or long-running query would block forever, crashing the UI.
+        // Cap it: after 3 s we move on and let the OS clean up the sockets.
+        Some(ActiveConnection::Postgres(p)) => {
+            let _ = tokio::time::timeout(timeout, p.close()).await;
+        }
+        Some(ActiveConnection::Sqlite(p)) => {
+            let _ = tokio::time::timeout(timeout, p.close()).await;
+        }
+        _ => {}
+    }
+}
+
+// ── PostgreSQL connect / test ─────────────────────────────────────────────────
+
+async fn open_pg(config: &PgConfig) -> Result<PgPool, String> {
     PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(std::time::Duration::from_secs(10))
@@ -54,8 +143,8 @@ async fn open_pool(config: &ConnectionConfig) -> Result<PgPool, String> {
         .map_err(|e| format!("Connection failed: {e}"))
 }
 
-pub async fn test_connection(config: ConnectionConfig) -> Result<(), String> {
-    let pool = open_pool(&config).await?;
+pub async fn test_connection(config: PgConfig) -> Result<(), String> {
+    let pool = open_pg(&config).await?;
     sqlx::query("SELECT 1")
         .execute(&pool)
         .await
@@ -64,37 +153,63 @@ pub async fn test_connection(config: ConnectionConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn connect(state: State<'_, DbState>, config: ConnectionConfig) -> Result<(), String> {
-    let pool = open_pool(&config).await?;
-    let old = {
-        let mut pool_guard = state.pool.lock().map_err(|e| e.to_string())?;
-        pool_guard.take()
-    };
-    if let Some(old) = old {
-        old.close().await;
+pub async fn connect(state: State<'_, DbState>, config: PgConfig) -> Result<(), String> {
+    let pool = open_pg(&config).await?;
+    close_existing(&state).await;
+    set_conn(&state, Some(ActiveConnection::Postgres(pool)))
+}
+
+// ── SQLite connect / test ─────────────────────────────────────────────────────
+
+fn sqlite_url(path: &str) -> String {
+    if path == ":memory:" {
+        "sqlite::memory:".to_string()
+    } else {
+        format!("sqlite:{path}")
     }
-    *state.pool.lock().map_err(|e| e.to_string())? = Some(pool);
-    *state.config.lock().map_err(|e| e.to_string())? = Some(config);
+}
+
+async fn open_sqlite(config: &SqliteConfig) -> Result<SqlitePool, String> {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url(&config.file_path))
+        .await
+        .map_err(|e| format!("SQLite connection failed: {e}"))
+}
+
+pub async fn test_sqlite_connection(config: SqliteConfig) -> Result<(), String> {
+    let pool = open_sqlite(&config).await?;
+    sqlx::query("SELECT 1")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Query failed: {e}"))?;
+    pool.close().await;
     Ok(())
 }
+
+pub async fn connect_sqlite(state: State<'_, DbState>, config: SqliteConfig) -> Result<(), String> {
+    let pool = open_sqlite(&config).await?;
+    close_existing(&state).await;
+    set_conn(&state, Some(ActiveConnection::Sqlite(pool)))
+}
+
+// ── D1 connect / test ─────────────────────────────────────────────────────────
+
+pub async fn test_d1_connection(config: D1Config) -> Result<(), String> {
+    crate::db::d1::query(&config, "SELECT 1", vec![]).await?;
+    Ok(())
+}
+
+pub async fn connect_d1(state: State<'_, DbState>, config: D1Config) -> Result<(), String> {
+    // Validate credentials before storing
+    test_d1_connection(config.clone()).await?;
+    close_existing(&state).await;
+    set_conn(&state, Some(ActiveConnection::D1(config)))
+}
+
+// ── Disconnect ────────────────────────────────────────────────────────────────
 
 pub async fn disconnect(state: State<'_, DbState>) -> Result<(), String> {
-    let pool = {
-        let mut pool_guard = state.pool.lock().map_err(|e| e.to_string())?;
-        pool_guard.take()
-    };
-    if let Some(pool) = pool {
-        pool.close().await;
-    }
-    *state.config.lock().map_err(|e| e.to_string())? = None;
-    Ok(())
-}
-
-pub fn require_pool(state: &State<'_, DbState>) -> Result<PgPool, String> {
-    state
-        .pool
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone()
-        .ok_or_else(|| "Not connected to a database".to_string())
+    close_existing(&state).await;
+    set_conn(&state, None)
 }

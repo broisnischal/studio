@@ -1,6 +1,26 @@
 const STORAGE_KEY = 'db-studio:connections'
+const LAST_ID_KEY  = 'db-studio:last-connection-id'
 
-/** @typedef {{ id: string, name: string, host: string, port: number, database: string, user: string, password: string, ssl: boolean }} SavedConnection */
+/**
+ * @typedef {'postgres' | 'sqlite' | 'd1'} DbType
+ *
+ * @typedef {{
+ *   id: string
+ *   type: DbType
+ *   name: string
+ *   lastConnectedAt?: number
+ *   host?: string
+ *   port?: number
+ *   database?: string
+ *   user?: string
+ *   password?: string
+ *   ssl?: boolean
+ *   filePath?: string
+ *   accountId?: string
+ *   databaseId?: string
+ *   apiToken?: string
+ * }} SavedConnection
+ */
 
 export function newConnectionId() {
   return crypto.randomUUID()
@@ -15,8 +35,9 @@ export function loadSavedConnections() {
     if (!Array.isArray(parsed)) return []
     return parsed.map((c) => ({
       ...c,
-      id: c.id ?? newConnectionId(),
-      port: Number(c.port) || 5432,
+      id:   c.id   ?? newConnectionId(),
+      type: c.type ?? 'postgres',
+      port: c.port != null ? Number(c.port) : 5432,
     }))
   } catch {
     return []
@@ -31,7 +52,7 @@ export function saveConnections(connections) {
 /** @param {SavedConnection} conn */
 export function upsertConnection(conn) {
   const list = loadSavedConnections()
-  const idx = list.findIndex((c) => c.id === conn.id)
+  const idx  = list.findIndex((c) => c.id === conn.id)
   if (idx >= 0) list[idx] = conn
   else list.push(conn)
   saveConnections(list)
@@ -45,3 +66,24 @@ export function removeConnection(id) {
   return list
 }
 
+// ── Last-connection helpers ───────────────────────────────────────────────────
+
+/** @returns {string | null} */
+export function getLastConnectionId() {
+  try { return localStorage.getItem(LAST_ID_KEY) } catch { return null }
+}
+
+/** @param {string | null} id */
+export function setLastConnectionId(id) {
+  try {
+    if (id) localStorage.setItem(LAST_ID_KEY, id)
+    else    localStorage.removeItem(LAST_ID_KEY)
+  } catch {}
+}
+
+/** Returns the last-used connection if it still exists in the saved list. */
+export function getLastConnection() {
+  const id = getLastConnectionId()
+  if (!id) return null
+  return loadSavedConnections().find((c) => c.id === id) ?? null
+}

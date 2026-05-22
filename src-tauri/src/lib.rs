@@ -9,10 +9,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(DbState::default())
         .setup(|app| {
-            // Create the main window programmatically so we can attach on_navigation,
-            // which blocks external URLs from loading inside the webview (they are
-            // opened in the system browser by our JavaScript click handler instead).
-            tauri::WebviewWindowBuilder::new(
+            let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App("/".into()),
@@ -23,11 +20,9 @@ pub fn run() {
             .resizable(true)
             .on_navigation(|url| {
                 let scheme = url.scheme();
-                // Allow Tauri internal schemes
                 if matches!(scheme, "tauri" | "ipc") {
                     return true;
                 }
-                // Allow the app's own origin (localhost in dev, tauri.localhost in prod)
                 let host = url.host_str().unwrap_or("");
                 host == "localhost" || host == "tauri.localhost" || host == "127.0.0.1"
             })
@@ -40,12 +35,20 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // Suppress unused-variable warning in release builds
+            let _ = &window;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::toggle_devtools,
             commands::test_postgres_connection,
             commands::connect_postgres,
             commands::disconnect_postgres,
+            commands::test_sqlite,
+            commands::connect_sqlite_db,
+            commands::test_d1,
+            commands::connect_d1_db,
             commands::pg_list_schemas,
             commands::pg_list_tables,
             commands::pg_get_table_rows,
