@@ -23,6 +23,7 @@
     activeFilters,
     createFilter,
   } from '$lib/table-query.js'
+  import { formatCompactCount } from '$lib/table-list.js'
 
   /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
   /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
@@ -55,7 +56,9 @@
   } = $props()
 
   const deleteLabel = $derived(
-    selectedCount === 1 ? 'Delete 1 row' : `Delete ${selectedCount} rows`,
+    selectedCount === 1
+      ? 'Delete 1 row'
+      : `Delete ${formatCompactCount(selectedCount)} rows`,
   )
 
   const from = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1)
@@ -75,6 +78,16 @@
   let sortMenuOpen = $state(false)
   /** @type {HTMLInputElement | null} */
   let searchInputRef = $state(null)
+
+  // Local value so the input is not controlled by the prop during typing.
+  // Keeps focus when the parent triggers a re-render (e.g. loading state).
+  let localSearch = $state(rowSearch)
+  let searchDebounce = /** @type {ReturnType<typeof setTimeout> | null} */ (null)
+
+  // Sync from parent only when the prop changes from outside (e.g. table switch resets to '').
+  $effect(() => {
+    localSearch = rowSearch
+  })
 
   export function focusRowSearch() {
     searchInputRef?.focus()
@@ -119,10 +132,18 @@
 
   /** @param {string} value */
   function handleSearchInput(value) {
-    onsearchchange(value)
+    localSearch = value
+    if (searchDebounce) clearTimeout(searchDebounce)
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null
+      onsearchchange(value)
+    }, 250)
   }
 
   function clearSearch() {
+    localSearch = ''
+    if (searchDebounce) clearTimeout(searchDebounce)
+    searchDebounce = null
     onsearchchange('')
   }
 
@@ -164,10 +185,11 @@
 </script>
 
 <header
-  class="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border bg-panel px-3"
+  class="studio-chrome studio-table-toolbar flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 bg-panel px-3 py-1 md:flex-nowrap"
+  data-studio-chrome
 >
   <!-- Left -->
-  <div class="flex shrink-0 items-center gap-0.5">
+  <div class="order-1 flex shrink-0 items-center gap-0.5">
     <button
       type="button"
       class={cn(iconBtn, !sidebarOpen && 'bg-accent text-foreground')}
@@ -183,9 +205,11 @@
     </button>
   </div>
 
-  <!-- Center: search + filter + sort -->
-  <div class="flex min-w-0 flex-1 items-center justify-center gap-1">
-    <div class="relative flex h-7 min-w-0 max-w-sm flex-1 items-center">
+  <!-- Center: search + filter + sort (full-width row below pagination when narrow) -->
+  <div
+    class="order-3 flex min-w-0 flex-1 basis-full items-center gap-1 md:order-2 md:min-w-[12rem] md:basis-auto lg:max-w-xl"
+  >
+    <div class="relative flex h-7 min-w-0 flex-1 items-center">
       <Search class="pointer-events-none absolute left-2 size-3.5 text-muted-foreground" />
       <Input
         bind:ref={searchInputRef}
@@ -193,22 +217,22 @@
         role="searchbox"
         aria-label="Search all columns"
         class={cn(
-          'h-7 w-full min-w-[9rem] border-input bg-input/30 pl-7 pr-7 text-ui-sm shadow-none focus-visible:ring-2',
-          rowSearch.trim() && 'border-ring/40',
+          'h-7 w-full min-w-0 border-input bg-input/30 pl-7 pr-7 text-ui-sm shadow-none focus-visible:ring-2',
+          localSearch.trim() && 'border-ring/40',
         )}
         placeholder="Search all columns…"
-        value={rowSearch}
-        disabled={loading || columns.length === 0}
+        value={localSearch}
+        disabled={columns.length === 0}
         oninput={(e) => handleSearchInput(e.currentTarget.value)}
       />
       <button
         type="button"
         class={cn(
           'absolute right-1 inline-flex size-5 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
-          rowSearch ? 'opacity-100' : 'pointer-events-none opacity-0',
+          localSearch ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
         aria-label="Clear search"
-        tabindex={rowSearch ? 0 : -1}
+        tabindex={localSearch ? 0 : -1}
         onclick={clearSearch}
       >
         <X class="size-3" />
@@ -219,7 +243,7 @@
       <DropdownMenu.Trigger
         class={cn(
           iconBtn,
-          'relative',
+          'relative shrink-0',
           (filterCount > 0 || filterMenuOpen) && 'bg-accent text-foreground',
         )}
         title="Filter rows"
@@ -231,7 +255,7 @@
             class="absolute -top-0.5 -right-0.5 flex size-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-ui-3xs font-medium text-primary-foreground"
             aria-hidden="true"
           >
-            {filterCount}
+            {formatCompactCount(filterCount)}
           </span>
         {/if}
       </DropdownMenu.Trigger>
@@ -359,6 +383,7 @@
       <DropdownMenu.Trigger
         class={cn(
           iconBtn,
+          'shrink-0',
           (rowSort?.column || sortMenuOpen) && 'bg-accent text-foreground',
         )}
         title={sortLabel}
@@ -402,26 +427,31 @@
 
     <button
       type="button"
-      class="ml-0.5 inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-ui-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+      class="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary px-2 text-ui-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40 md:px-2.5"
       disabled
       title="Add record (soon)"
     >
-      <Plus class="size-3.5" />
-      <span class="hidden sm:inline">Add record</span>
+      <Plus class="size-3.5 shrink-0" />
+      <span class="hidden md:inline">Add record</span>
     </button>
   </div>
 
   <!-- Right: perf + pagination -->
-  <div class="flex shrink-0 items-center gap-1">
+  <div
+    class="order-2 ms-auto flex shrink-0 items-center gap-1 md:order-3 max-lg:max-w-[calc(100%-5rem)] max-lg:overflow-x-auto max-lg:[scrollbar-width:none] max-lg:[&::-webkit-scrollbar]:hidden"
+  >
     <span
-      class="hidden font-mono text-ui-xs text-muted-foreground tabular-nums lg:inline"
+      class="hidden font-mono text-ui-xs text-muted-foreground tabular-nums xl:inline"
       data-font="mono">{queryMs}ms</span
     >
-    <span class="hidden text-ui-sm text-muted-foreground tabular-nums sm:inline">
-      {from}–{to} of {total}
+    <span
+      class="hidden text-ui-sm text-muted-foreground tabular-nums lg:inline"
+      title="{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {total.toLocaleString('en-US')}"
+    >
+      {formatCompactCount(from)}–{formatCompactCount(to)} of {formatCompactCount(total)}
     </span>
 
-    <span class="mx-0.5 hidden h-4 w-px bg-border sm:inline"></span>
+    <span class="mx-0.5 hidden h-4 w-px bg-border lg:inline"></span>
 
     <Select.Root
       type="single"
@@ -469,7 +499,10 @@
       </Select.Content>
     </Select.Root>
 
-    <span class="text-ui-xs text-muted-foreground tabular-nums">of {pageCount}</span>
+    <span
+      class="hidden text-ui-xs text-muted-foreground tabular-nums sm:inline"
+      title={pageCount.toLocaleString('en-US')}
+    >of {formatCompactCount(pageCount)}</span>
 
     <button
       type="button"

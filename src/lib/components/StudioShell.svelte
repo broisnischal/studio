@@ -14,6 +14,8 @@
   import ConnectionModal from './ConnectionModal.svelte'
   import SettingsDialog from './SettingsDialog.svelte'
   import KeyboardShortcutsDialog from './KeyboardShortcutsDialog.svelte'
+  import InsiderDialog from './InsiderDialog.svelte'
+  import UpdateDialog from './UpdateDialog.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -40,7 +42,7 @@
     cloneTableTabState,
     cloneSqlTabState,
   } from '$lib/studio-tabs.js'
-  import { normalizeTableRowCount } from '$lib/table-list.js'
+  import { formatCompactCount, normalizeTableRowCount } from '$lib/table-list.js'
   import {
     DEFAULT_PAGE_SIZE,
     filtersApiSignature,
@@ -84,6 +86,7 @@
   let savedConnections = $state(loadSavedConnections())
   let showSettingsModal = $state(false)
   let showShortcutsModal = $state(false)
+  let showInsiderModal = $state(false)
   let commandOpen = $state(false)
   let sidebarOpen = $state(loadLayout().navSidebarOpen)
 
@@ -99,6 +102,8 @@
   let loadingTables = $state(false)
 
   let columns = $state([])
+  /** @type {Map<string, typeof columns>} */
+  let tableColumnsCache = $state(new Map())
   let primaryKey = $state([])
   /** @type {ForeignKeyInfo[]} */
   let foreignKeys = $state([])
@@ -121,6 +126,8 @@
   let tableToolbar = $state(null)
   /** @type {ReturnType<typeof setTimeout> | null} */
   let filterDebounceTimer = null
+  /** Tracks which tab IDs currently have an in-flight background fetch. */
+  const fetchingTabIds = new Set()
   let error = $state('')
   let selected = $state(new Set())
   /** @type {number | null} */
@@ -181,9 +188,26 @@
     activeSchema,
     tables: tables.map((t) => ({ name: t.name, rowCount: t.rowCount })),
     activeTable,
-    columns: columns.map((c) => ({ name: c.name, dataType: c.dataType ?? c.data_type ?? '' })),
+    columns: columns.map((c) => ({
+      name: c.name,
+      dataType: c.dataType ?? c.data_type ?? '',
+      nullable: c.nullable ?? true,
+      enumValues: c.enumValues ?? c.enum_values ?? undefined,
+    })),
     primaryKey: [...primaryKey],
     foreignKeys: foreignKeys.map((fk) => ({ ...fk })),
+    /** @type {Record<string, { name: string, dataType: string, nullable: boolean, enumValues?: string[] }[]>} */
+    allTableColumns: Object.fromEntries(
+      [...tableColumnsCache.entries()].map(([key, cols]) => [
+        key,
+        cols.map((c) => ({
+          name: c.name,
+          dataType: c.dataType ?? c.data_type ?? '',
+          nullable: c.nullable ?? true,
+          enumValues: c.enumValues ?? c.enum_values ?? undefined,
+        })),
+      ]),
+    ),
   }))
 
   const inspectorTarget = $derived.by(() => {
@@ -237,7 +261,7 @@
     rows = s.rows
     total = s.total
     queryMs = s.queryMs
-    loadingRows = false
+    loadingRows = s.loadingRows ?? false
     error = s.error
     selected = new Set(s.selected)
     focusedRow = s.focusedRow
@@ -326,8 +350,9 @@
         await loadTables()
       }
       applyTableSnapshot(s)
-      if (s.table && s.columns.length === 0) {
-        await loadRows()
+      if (s.table && !fetchingTabIds.has(tab.id) && s.columns.length === 0) {
+        // No background fetch in flight and no cached data — kick one off
+        void fetchRowsForTab(tab.id)
       }
     }
   }
@@ -464,6 +489,12 @@
     showShortcutsModal = true
   })
 
+  createHotkey('Mod+I', (e) => {
+    if (commandOpen || showConnectionModal || showSettingsModal) return
+    e.preventDefault()
+    showInsiderModal = !showInsiderModal
+  })
+
   /** @returns {boolean} */
   function isFocusInRegion(region) {
     const el = document.activeElement
@@ -587,6 +618,20 @@
     }
   }
 
+  /** @param {string} id — keep only this tab, close everything else */
+  async function closeOtherTabs(id) {
+    const keep = tabs.find((t) => t.id === id)
+    if (!keep) return
+    tabs = [keep]
+    await activateTab(keep.id)
+  }
+
+  async function closeAllTabs() {
+    tabs = [createWelcomeTab()]
+    activeTabId = tabs[0].id
+    clearTableEditor()
+  }
+
   /**
    * @param {string} schema
    * @param {string} table
@@ -613,6 +658,10 @@
     saveActiveTabState()
     dropWelcomeTabs()
     const tab = createTableTab(schema, table)
+    // Pre-bake any filters/search into the tab state before fetching
+    if (tab.state && filters) {
+      /** @type {TableTabState} */ (tab.state).rowFilters = filters.map((f) => ({ ...f }))
+    }
     tabs = [...tabs, tab]
     activeTabId = tab.id
     activeTable = table
@@ -636,7 +685,8 @@
       activeSchema = schema
       await loadTables()
     }
-    await loadRows()
+    // Fire the fetch in background — caller can open more tabs without waiting
+    void fetchRowsForTab(tab.id)
   }
 
   /** @param {{ rowIdx: number, colIdx: number }} detail */
@@ -705,11 +755,7 @@
   function handleRowSearchChange(value) {
     rowSearch = value
     page = 1
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
-    searchDebounceTimer = setTimeout(() => {
-      searchDebounceTimer = null
-      void loadRows()
-    }, SEARCH_DEBOUNCE_MS)
+    void loadRows()
   }
 
   /** @param {TableFilter[]} filters */
@@ -746,6 +792,116 @@
     await loadRows()
   }
 
+  /**
+   * Fetch rows for any tab in the background.
+   * Writes results into that tab's state; if the tab is still active when the
+   * fetch resolves, also syncs to the global editor state so the UI updates.
+   * @param {string} tabId
+   */
+  async function fetchRowsForTab(tabId) {
+    if (fetchingTabIds.has(tabId)) return
+    fetchingTabIds.add(tabId)
+
+    const getTab = () => tabs.find((t) => t.id === tabId)
+    const tab = getTab()
+    if (!tab || tab.kind !== 'table' || !tab.state) {
+      fetchingTabIds.delete(tabId)
+      return
+    }
+    const s = /** @type {TableTabState} */ (tab.state)
+    if (!s.table) {
+      fetchingTabIds.delete(tabId)
+      return
+    }
+
+    // Mark the tab itself as loading so switching to it shows a spinner
+    tabs = tabs.map((t) =>
+      t.id === tabId && t.kind === 'table'
+        ? { ...t, state: { .../** @type {TableTabState} */ (t.state), loadingRows: true, error: '' } }
+        : t,
+    )
+    if (tabId === activeTabId) { loadingRows = true; error = '' }
+
+    try {
+      const offset = (s.page - 1) * s.pageSize
+      const { sortColumn, sortDirection } = sortForApi(s.rowSort)
+      const data = await getTableRows(s.schema, s.table, s.pageSize, offset, {
+        search: s.rowSearch,
+        sortColumn,
+        sortDirection,
+        filters: filtersForApi(s.rowFilters),
+      })
+
+      const result = {
+        columns: data.columns ?? [],
+        primaryKey: data.primaryKey ?? data.primary_key ?? [],
+        foreignKeys: normalizeForeignKeys(data.foreignKeys ?? data.foreign_keys),
+        rows: data.rows ?? [],
+        total: Number(data.total ?? 0),
+        queryMs: Number(data.queryMs ?? data.query_ms ?? 0),
+        loadingRows: false,
+        error: '',
+        selected: new Set(),
+        focusedRow: null,
+        inspectorRow: null,
+        editingCell: null,
+      }
+
+      // Always persist to the tab's own state
+      tabs = tabs.map((t) =>
+        t.id === tabId && t.kind === 'table'
+          ? { ...t, state: { .../** @type {TableTabState} */ (t.state), ...result } }
+          : t,
+      )
+
+      // Update AI schema cache
+      const cacheKey = `${s.schema}.${s.table}`
+      const nextCache = new Map(tableColumnsCache)
+      nextCache.set(cacheKey, result.columns)
+      tableColumnsCache = nextCache
+
+      // Sync to global state only if this tab is still active
+      if (tabId === activeTabId) {
+        columns = result.columns
+        primaryKey = result.primaryKey
+        foreignKeys = result.foreignKeys
+        rows = result.rows
+        total = result.total
+        queryMs = result.queryMs
+        loadingRows = false
+        error = ''
+      }
+    } catch (e) {
+      const errStr = String(e)
+      tabs = tabs.map((t) =>
+        t.id === tabId && t.kind === 'table'
+          ? {
+              ...t,
+              state: {
+                .../** @type {TableTabState} */ (t.state),
+                loadingRows: false,
+                error: errStr,
+                columns: [],
+                rows: [],
+                total: 0,
+              },
+            }
+          : t,
+      )
+      if (tabId === activeTabId) {
+        loadingRows = false
+        error = errStr
+        columns = []
+        primaryKey = []
+        foreignKeys = []
+        rows = []
+        total = 0
+      }
+    } finally {
+      fetchingTabIds.delete(tabId)
+    }
+  }
+
   async function loadRows() {
     if (!activeTable) {
       columns = []
@@ -769,6 +925,12 @@
         filters: filtersForApi(rowFilters),
       })
       columns = data.columns ?? []
+      if (activeTable) {
+        const cacheKey = `${activeSchema}.${activeTable}`
+        const next = new Map(tableColumnsCache)
+        next.set(cacheKey, columns)
+        tableColumnsCache = next
+      }
       primaryKey = data.primaryKey ?? data.primary_key ?? []
       foreignKeys = normalizeForeignKeys(data.foreignKeys ?? data.foreign_keys)
       rows = data.rows ?? []
@@ -817,7 +979,7 @@
       sqlQueryMs = data.queryMs ?? data.query_ms ?? 0
       sqlMessage = data.message ?? ''
       if (!sqlMessage && data.rowCount != null && sqlColumns.length === 0) {
-        sqlMessage = `${data.rowCount} row(s) affected`
+        sqlMessage = `${formatCompactCount(data.rowCount)} row(s) affected`
       }
     } catch (e) {
       sqlError = String(e)
@@ -1002,7 +1164,7 @@
     const n = selected.size
     try {
       await handleDeleteRows([...selected])
-      toast.success(n === 1 ? 'Row deleted' : `${n} rows deleted`)
+      toast.success(n === 1 ? 'Row deleted' : `${formatCompactCount(n)} rows deleted`)
     } catch (err) {
       toast.error('Delete failed', { description: String(err) })
     }
@@ -1099,6 +1261,10 @@
 
 <KeyboardShortcutsDialog bind:open={showShortcutsModal} />
 
+<InsiderDialog bind:open={showInsiderModal} />
+
+<UpdateDialog />
+
 <CommandPalette
   bind:open={commandOpen}
   connected={!!connection}
@@ -1178,12 +1344,17 @@
         {activeTabId}
         onselect={(id) => activateTab(id)}
         onclose={closeTab}
+        oncloseothers={closeOtherTabs}
+        oncloseall={closeAllTabs}
         onnew={openWelcomeTab}
       />
 
       <!-- AI tab: always mounted once it exists so conversation state survives tab switches -->
       {#if tabs.some((t) => t.kind === 'ai')}
-        <div class={activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+        <div
+          class={activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={activeTab?.kind !== 'ai'}
+        >
           <AiChat
             schemaContext={aiSchemaContext}
             {connectionId}
@@ -1266,6 +1437,7 @@
               {rows}
               {primaryKey}
               {foreignKeys}
+              columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
               loading={loadingRows}
               saving={savingCell || deletingRows}
               bind:selected

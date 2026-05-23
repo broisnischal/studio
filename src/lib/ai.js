@@ -5,6 +5,8 @@
  * @typedef {{ type: 'text', content: string } | { type: 'sql', content: string } | { type: 'mermaid', content: string }} AssistantPart
  */
 
+import { formatCompactCount } from '$lib/table-list.js'
+
 /** OpenAI-compatible tool definitions — work with Mistral, OpenAI, recent Ollama models. */
 export const AI_TOOLS = [
   {
@@ -44,6 +46,94 @@ export const AI_TOOLS = [
   },
 ]
 
+export const MAX_AI_RETRIES = 5
+const INITIAL_BACKOFF_MS = 1000
+/** HTTP statuses we retry (transient overload / rate limits). */
+const RETRYABLE_STATUSES = new Set([429, 502, 503])
+
+/** @param {number} ms @param {AbortSignal} [signal] */
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+      return
+    }
+    const id = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(id)
+        reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+      },
+      { once: true },
+    )
+  })
+}
+
+/** @param {string | null} header */
+function retryAfterMs(header) {
+  if (!header) return null
+  const seconds = Number(header)
+  if (!Number.isNaN(seconds) && seconds >= 0) return Math.min(seconds * 1000, 120_000)
+  const when = Date.parse(header)
+  if (!Number.isNaN(when)) return Math.min(Math.max(0, when - Date.now()), 120_000)
+  return null
+}
+
+/** @param {number} attempt @param {string | null} retryAfter */
+function backoffMs(attempt, retryAfter) {
+  const fromHeader = retryAfterMs(retryAfter)
+  if (fromHeader != null && fromHeader > 0) return fromHeader
+  const base = INITIAL_BACKOFF_MS * 2 ** attempt
+  const jitter = Math.floor(Math.random() * base * 0.25)
+  return Math.min(base + jitter, 120_000)
+}
+
+/** @param {number} status @param {string} body */
+function formatApiError(status, body) {
+  let detail = body.slice(0, 400)
+  try {
+    const j = JSON.parse(body)
+    detail = String(j.message ?? j.error?.message ?? detail)
+  } catch {
+    /* use raw body */
+  }
+  if (status === 429) {
+    const hint =
+      'Wait a moment and try again, or check your API plan, model tier, and usage limits.'
+    return /rate limit/i.test(detail)
+      ? `Rate limit exceeded. ${hint}`
+      : `Rate limit exceeded (${detail}). ${hint}`
+  }
+  return `AI API ${status}: ${detail}`
+}
+
+/**
+ * @param {string} url
+ * @param {RequestInit} init
+ * @param {AbortSignal} [signal]
+ * @param {(info: { attempt: number, waitMs: number, status: number }) => void} [onRetry]
+ */
+async function fetchWithAiRetry(url, init, signal, onRetry) {
+  let attempt = 0
+  while (true) {
+    const res = await fetch(url, { ...init, signal })
+    if (res.ok) return res
+
+    const retryable = RETRYABLE_STATUSES.has(res.status)
+    if (!retryable || attempt >= MAX_AI_RETRIES) {
+      const text = await res.text().catch(() => '')
+      throw new Error(formatApiError(res.status, text))
+    }
+
+    await res.text().catch(() => '')
+    const waitMs = backoffMs(attempt, res.headers.get('Retry-After'))
+    onRetry?.({ attempt: attempt + 1, waitMs, status: res.status })
+    await sleep(waitMs, signal)
+    attempt++
+  }
+}
+
 /**
  * Call any OpenAI-compatible chat completions endpoint.
  * Returns the assistant message content and any tool calls.
@@ -63,19 +153,18 @@ export async function chatCompletionRaw(settings, messages, tools = null) {
     body.tool_choice = 'auto'
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+  const res = await fetchWithAiRetry(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  })
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`AI API ${res.status}: ${text.slice(0, 400)}`)
-  }
+    undefined,
+  )
 
   const data = await res.json()
   const msg = data.choices?.[0]?.message
@@ -95,9 +184,10 @@ export async function chatCompletionRaw(settings, messages, tools = null) {
  * @param {ApiMessage[]} messages
  * @param {unknown[] | null} tools
  * @param {AbortSignal} [signal]
+ * @param {(info: { attempt: number, waitMs: number, status: number }) => void} [onRetry]
  * @returns {AsyncGenerator<{ textDelta?: string, toolCalls?: ToolCall[] }>}
  */
-export async function* chatCompletionStream(settings, messages, tools = null, signal) {
+export async function* chatCompletionStream(settings, messages, tools = null, signal, onRetry) {
   const base = settings.baseUrl.replace(/\/+$/, '')
   const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
 
@@ -105,20 +195,19 @@ export async function* chatCompletionStream(settings, messages, tools = null, si
   const body = { model: settings.model, messages, stream: true }
   if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+  const res = await fetchWithAiRetry(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
     signal,
-  })
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`AI API ${res.status}: ${text.slice(0, 400)}`)
-  }
+    onRetry,
+  )
   if (!res.body) throw new Error('No response body')
 
   const reader = res.body.getReader()
@@ -222,24 +311,33 @@ export function parseAssistantMessage(content) {
  *   activeSchema: string,
  *   tables: { name: string, rowCount?: number }[],
  *   activeTable: string | null,
- *   columns: { name: string, dataType: string }[],
+ *   columns: { name: string, dataType: string, nullable?: boolean, enumValues?: string[] }[],
  *   primaryKey: string[],
  *   foreignKeys: { columns: string[], referencedSchema: string, referencedTable: string, referencedColumns: string[] }[],
+ *   allTableColumns?: Record<string, { name: string, dataType: string, nullable?: boolean, enumValues?: string[] }[]>,
  * }} ctx
  */
 export function buildSystemPrompt(ctx) {
   const tableList = ctx.tables.length
     ? ctx.tables
-        .map((t) => `  • ${t.name}${t.rowCount != null ? ` — ${t.rowCount.toLocaleString()} rows` : ''}`)
+        .map((t) => `  • ${t.name}${t.rowCount != null ? ` — ${formatCompactCount(t.rowCount)} rows` : ''}`)
         .join('\n')
     : '  (no tables loaded yet — use describe_table or execute_sql to explore)'
+
+  /** @param {{ name: string, dataType: string, nullable?: boolean, enumValues?: string[] }} c */
+  function colLine(c) {
+    const parts = [c.name.padEnd(24), c.dataType]
+    if (c.nullable === false) parts.push('NOT NULL')
+    if (c.enumValues?.length) parts.push(`enum(${c.enumValues.join(', ')})`)
+    return '  ' + parts.join('  ')
+  }
 
   const activeTableSection = ctx.activeTable && ctx.columns.length
     ? [
         ``,
         `## Currently Open Table: ${ctx.activeSchema}.${ctx.activeTable}`,
         `Columns:`,
-        ctx.columns.map((c) => `  ${c.name}  ${c.dataType}`).join('\n'),
+        ctx.columns.map(colLine).join('\n'),
         ctx.primaryKey.length ? `Primary key: ${ctx.primaryKey.join(', ')}` : '',
         ctx.foreignKeys.length
           ? `Foreign keys:\n${ctx.foreignKeys
@@ -254,6 +352,19 @@ export function buildSystemPrompt(ctx) {
         .join('\n')
     : ''
 
+  const otherTablesSection = (() => {
+    const cache = ctx.allTableColumns ?? {}
+    const activeKey = ctx.activeTable ? `${ctx.activeSchema}.${ctx.activeTable}` : null
+    const otherEntries = Object.entries(cache).filter(([k]) => k !== activeKey)
+    if (!otherEntries.length) return ''
+    return (
+      `\n## Other Loaded Tables\n` +
+      otherEntries
+        .map(([key, cols]) => `${key}:\n${cols.map(colLine).join('\n')}`)
+        .join('\n\n')
+    )
+  })()
+
   return `You are an expert PostgreSQL database assistant embedded in DB Studio, a database GUI client.
 Your role: help users explore, query, and understand their database by executing real tool calls.
 
@@ -264,7 +375,7 @@ Active schema: ${ctx.activeSchema}
 ## Tables in "${ctx.activeSchema}"
 ${tableList}
 ${activeTableSection}
-
+${otherTablesSection}
 ## Tools
 - \`execute_sql(sql)\` — Run any SQL. Returns rows+columns for SELECT; affected count for DML.
 - \`describe_table(schema, table)\` — Get column definitions before writing queries against an unknown table.
@@ -275,7 +386,7 @@ ${activeTableSection}
 3. After tool results, give a concise human-readable summary (1–3 sentences max).
 4. For destructive SQL (DELETE / DROP / TRUNCATE): explain what will change, then execute. The user will be prompted to confirm before it runs.
 5. If a query returns no rows, say so clearly and suggest alternatives.
-6. Prefer CTEs over subqueries for readability. Always add LIMIT for exploratory SELECTs.
+6. **LIMIT is mandatory.** Every SELECT must include an explicit LIMIT. Tables can have millions of rows — omitting LIMIT will time out the query and crash the client. Use \`LIMIT 100\` for exploration, higher only when the user explicitly requests more data.
 7. If a tool call returns an error, do NOT retry the exact same query. Analyze the error, produce a corrected query, or explain to the user why it cannot be done.
 8. To visualize data or structure, output a \`\`\`mermaid code block — it will be rendered as an interactive diagram. Use \`erDiagram\` for entity-relationship / schema diagrams, \`flowchart TD\` for process flows, and \`xychart-beta\` for bar/line charts.
 9. For ERD / schema diagrams, fetch all column and FK data in two \`execute_sql\` calls rather than calling \`describe_table\` per table:

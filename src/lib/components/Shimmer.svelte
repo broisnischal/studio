@@ -11,7 +11,7 @@
 <div
   {style}
   class={cn(
-    'shimmer bg-muted/80',
+    'skeleton',
     rounded === 'none' && 'rounded-none',
     rounded === 'sm' && 'rounded-sm',
     rounded === 'md' && 'rounded-md',

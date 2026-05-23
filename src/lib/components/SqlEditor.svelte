@@ -20,7 +20,10 @@
     schemaHints = /** @type {SqlSchemaHints} */ ({}),
     onmodk = undefined,
     onmodenter = undefined,
+    onmodr = undefined,
     onmods = undefined,
+    /** @type {(actions: { format: () => Promise<void> }) => void} */
+    onactionsready = undefined,
   } = $props()
 
   let container = $state(null)
@@ -42,10 +45,17 @@
 
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyK, () => run(onmodk))
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => run(onmodenter))
+    ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyR, () => run(onmodr))
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, async () => {
+      await formatDocument()
+    })
+
+    async function formatDocument() {
       await ed.getAction('editor.action.formatDocument')?.run()
       run(onmods)
-    })
+    }
+
+    onactionsready?.({ format: formatDocument })
   }
 
   onMount(() => {

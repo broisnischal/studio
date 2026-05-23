@@ -1,11 +1,5 @@
 <script>
-  import { cn } from '$lib/utils.js'
-
   let {
-    /** @type {'x' | 'y'} */
-    axis = 'x',
-    /** @type {'start' | 'end'} */
-    edge = 'end',
     onresizestart = () => {},
     onresize = () => {},
     onresizeend = () => {},
@@ -15,16 +9,15 @@
   function handlePointerDown(e) {
     if (e.button !== 0) return
     e.preventDefault()
+    e.stopPropagation()
     onresizestart()
     const el = /** @type {HTMLElement} */ (e.currentTarget)
     el.setPointerCapture(e.pointerId)
     const startX = e.clientX
-    const startY = e.clientY
 
     /** @param {PointerEvent} ev */
     function onMove(ev) {
-      const delta = axis === 'x' ? ev.clientX - startX : ev.clientY - startY
-      onresize(edge === 'end' ? delta : -delta)
+      onresize(ev.clientX - startX)
     }
 
     /** @param {PointerEvent} ev */
@@ -45,24 +38,13 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   role="separator"
-  aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
-  aria-label="Resize panel"
+  aria-orientation="vertical"
+  aria-label="Resize column"
   tabindex="-1"
-  class={cn(
-    'group relative z-10 shrink-0 touch-none select-none',
-    axis === 'x' ? 'h-full w-1 cursor-col-resize' : 'h-1 w-full cursor-row-resize',
-  )}
+  class="group/handle absolute top-0 right-0 z-20 h-full w-2 translate-x-1/2 cursor-col-resize touch-none select-none"
   onpointerdown={handlePointerDown}
 >
   <div
-    class={cn(
-      'absolute transition-colors group-hover:bg-border/80 group-active:bg-border',
-      axis === 'x' && 'inset-y-0 w-3',
-      axis === 'x' && edge === 'end' && '-right-1',
-      axis === 'x' && edge === 'start' && '-left-1',
-      axis === 'y' && 'inset-x-0 h-3',
-      axis === 'y' && edge === 'end' && '-bottom-1',
-      axis === 'y' && edge === 'start' && '-top-1',
-    )}
+    class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/0 transition-colors group-hover/handle:bg-primary/40 group-active/handle:bg-primary"
   ></div>
 </div>

@@ -20,6 +20,23 @@ function normalizedType(dataType) {
 }
 
 /**
+ * @param {{ enumValues?: string[], enum_values?: string[] } | null | undefined} col
+ * @returns {string[] | null}
+ */
+export function getColumnEnumValues(col) {
+  const values = col?.enumValues ?? col?.enum_values
+  return Array.isArray(values) && values.length > 0 ? values : null
+}
+
+/**
+ * @param {string} dataType
+ */
+export function isBooleanType(dataType) {
+  const t = normalizedType(dataType)
+  return t === 'boolean' || t === 'bool'
+}
+
+/**
  * @param {string} dataType
  */
 export function isEditableType(dataType) {
@@ -31,14 +48,25 @@ export function isEditableType(dataType) {
 /**
  * @param {string} raw
  * @param {string} dataType
+ * @param {string[] | null} [enumValues]
  * @returns {ParseResult}
  */
-export function parseCellInput(raw, dataType) {
+export function parseCellInput(raw, dataType, enumValues = null) {
   const trimmed = raw.trim()
   const t = normalizedType(dataType)
 
   if (trimmed === '' || trimmed.toUpperCase() === 'NULL') {
     return { ok: true, value: null }
+  }
+
+  if (enumValues?.length) {
+    if (!enumValues.includes(trimmed)) {
+      return {
+        ok: false,
+        message: `Must be one of: ${enumValues.join(', ')}`,
+      }
+    }
+    return { ok: true, value: trimmed }
   }
 
   if (

@@ -1,6 +1,7 @@
 use super::connection::{require_conn, require_pool, ActiveConnection, DbState};
 use super::schema::validate_ident;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use futures::TryStreamExt;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,6 +15,106 @@ use uuid::Uuid;
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
+    /// false when the column has a NOT NULL constraint
+    pub nullable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enum_values: Option<Vec<String>>,
+}
+
+impl ColumnInfo {
+    pub(crate) fn new(name: impl Into<String>, data_type: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            data_type: data_type.into(),
+            nullable: true,
+            enum_values: None,
+        }
+    }
+}
+
+async fn fetch_table_column_nullable(
+    pool: &sqlx::PgPool,
+    schema: &str,
+    table: &str,
+) -> Result<HashMap<String, bool>, String> {
+    let rows = sqlx::query(
+        r#"
+        SELECT column_name::text, is_nullable::text
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        "#,
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to load nullable info: {e}"))?;
+
+    let mut map: HashMap<String, bool> = HashMap::new();
+    for row in rows {
+        if let (Ok(name), Ok(is_nullable)) = (
+            row.try_get::<String, _>(0),
+            row.try_get::<String, _>(1),
+        ) {
+            map.insert(name, is_nullable.eq_ignore_ascii_case("YES"));
+        }
+    }
+    Ok(map)
+}
+
+fn apply_column_nullable(columns: &mut [ColumnInfo], nullable: &HashMap<String, bool>) {
+    for col in columns.iter_mut() {
+        if let Some(&is_nullable) = nullable.get(&col.name) {
+            col.nullable = is_nullable;
+        }
+    }
+}
+
+async fn fetch_table_column_enums(
+    pool: &sqlx::PgPool,
+    schema: &str,
+    table: &str,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let rows = sqlx::query(
+        r#"
+        SELECT c.column_name::text, e.enumlabel::text
+        FROM information_schema.columns c
+        JOIN pg_catalog.pg_type t
+          ON t.typname = c.udt_name AND t.typtype = 'e'
+        JOIN pg_catalog.pg_namespace n
+          ON n.oid = t.typnamespace AND n.nspname = c.udt_schema
+        JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
+        WHERE c.table_schema = $1 AND c.table_name = $2
+        ORDER BY c.column_name, e.enumsortorder
+        "#,
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to load enum values: {e}"))?;
+
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let column: String = row
+            .try_get(0)
+            .map_err(|e| format!("Invalid enum column name: {e}"))?;
+        let label: String = row
+            .try_get(1)
+            .map_err(|e| format!("Invalid enum label: {e}"))?;
+        map.entry(column).or_default().push(label);
+    }
+    Ok(map)
+}
+
+fn apply_column_enums(columns: &mut [ColumnInfo], enums: &HashMap<String, Vec<String>>) {
+    for col in columns.iter_mut() {
+        if let Some(values) = enums.get(&col.name) {
+            if !values.is_empty() {
+                col.enum_values = Some(values.clone());
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +342,36 @@ fn normalize_pg_type(data_type: &str) -> String {
         .unwrap_or(data_type)
         .trim()
         .to_string()
+}
+
+/// Quoted PostgreSQL type reference for casts, e.g. `"public"."UserGenderEnum"`.
+fn pg_cast_type_ref(udt_schema: &str, udt_name: &str) -> Result<String, String> {
+    validate_ident(udt_schema)?;
+    validate_ident(udt_name)?;
+    Ok(format!(r#""{udt_schema}"."{udt_name}""#))
+}
+
+#[derive(Debug, Clone)]
+struct PgColumnMeta {
+    data_type: String,
+    udt_schema: Option<String>,
+    udt_name: Option<String>,
+}
+
+impl PgColumnMeta {
+    fn set_assignment_sql(&self, column: &str) -> Result<String, String> {
+        validate_ident(column)?;
+        if self.data_type.eq_ignore_ascii_case("USER-DEFINED") {
+            let udt_name = self
+                .udt_name
+                .as_deref()
+                .ok_or_else(|| format!("Missing UDT name for column: {column}"))?;
+            let udt_schema = self.udt_schema.as_deref().unwrap_or("public");
+            let type_ref = pg_cast_type_ref(udt_schema, udt_name)?;
+            return Ok(format!(r#""{column}" = $1::{type_ref}"#));
+        }
+        Ok(format!(r#""{column}" = $1"#))
+    }
 }
 
 fn validate_typed_value(data_type: &str, value: &Value) -> Result<(), String> {
@@ -561,14 +692,11 @@ pub async fn get_table_rows(
         .await
         .map_err(|e| format!("Failed to fetch rows: {e}"))?;
 
-    let columns = if let Some(first) = rows.first() {
+    let mut columns: Vec<ColumnInfo> = if let Some(first) = rows.first() {
         first
             .columns()
             .iter()
-            .map(|c| ColumnInfo {
-                name: c.name().to_string(),
-                data_type: pg_type_label(c.type_info().name()),
-            })
+            .map(|c| ColumnInfo::new(c.name(), pg_type_label(c.type_info().name())))
             .collect()
     } else {
         let meta = sqlx::query(&format!(
@@ -587,13 +715,20 @@ pub async fn get_table_rows(
 
         meta.iter()
             .filter_map(|r| {
-                Some(ColumnInfo {
-                    name: r.try_get(0).ok()?,
-                    data_type: r.try_get::<String, _>(1).ok()?.to_lowercase(),
-                })
+                Some(ColumnInfo::new(
+                    r.try_get::<String, _>(0).ok()?,
+                    r.try_get::<String, _>(1).ok()?.to_lowercase(),
+                ))
             })
             .collect()
     };
+
+    if let Ok(enums) = fetch_table_column_enums(&pool, &schema, &table).await {
+        apply_column_enums(&mut columns, &enums);
+    }
+    if let Ok(nullable) = fetch_table_column_nullable(&pool, &schema, &table).await {
+        apply_column_nullable(&mut columns, &nullable);
+    }
 
     let data: Vec<Vec<Value>> = rows
         .iter()
@@ -649,36 +784,43 @@ pub async fn update_table_cell(
 
     let meta_rows = sqlx::query(
         r#"
-        SELECT column_name::text, data_type::text
+        SELECT column_name::text, data_type::text, udt_schema::text, udt_name::text
         FROM information_schema.columns
         WHERE table_schema = $1 AND table_name = $2
         "#,
-    ) 
+    )
     .bind(&schema)
     .bind(&table)
     .fetch_all(&pool)
     .await
     .map_err(|e| format!("Failed to load column metadata: {e}"))?;
 
-    let mut column_types: HashMap<String, String> = HashMap::new();
+    let mut column_meta: HashMap<String, PgColumnMeta> = HashMap::new();
     for row in &meta_rows {
         if let (Ok(name), Ok(dt)) = (
             row.try_get::<String, _>(0),
             row.try_get::<String, _>(1),
         ) {
-            column_types.insert(name, dt);
+            column_meta.insert(
+                name,
+                PgColumnMeta {
+                    data_type: dt,
+                    udt_schema: row.try_get(2).ok(),
+                    udt_name: row.try_get(3).ok(),
+                },
+            );
         }
     }
 
-    let data_type = column_types
+    let col_meta = column_meta
         .get(&column)
         .ok_or_else(|| format!("Unknown column: {column}"))?;
 
-    if normalize_pg_type(data_type).contains("bytea") {
+    if normalize_pg_type(&col_meta.data_type).contains("bytea") {
         return Err("Cannot edit bytea columns".into());
     }
 
-    validate_typed_value(data_type, &value)?;
+    validate_typed_value(&col_meta.data_type, &value)?;
 
     let mut where_parts = Vec::new();
     let mut bind_idx = 2_u32;
@@ -688,21 +830,22 @@ pub async fn update_table_cell(
         bind_idx += 1;
     }
 
+    let set_clause = col_meta.set_assignment_sql(&column)?;
     let sql = format!(
-        r#"UPDATE "{schema}"."{table}" SET "{column}" = $1 WHERE {}"#,
+        r#"UPDATE "{schema}"."{table}" SET {set_clause} WHERE {}"#,
         where_parts.join(" AND ")
     );
 
     let mut q = sqlx::query(&sql);
-    q = bind_typed_value(q, data_type, &value)?;
+    q = bind_typed_value(q, &col_meta.data_type, &value)?;
     for pk_col in &pk_columns {
         let pk_val = primary_key
             .get(pk_col)
             .ok_or_else(|| format!("Missing primary key: {pk_col}"))?;
-        let pk_type = column_types
+        let pk_meta = column_meta
             .get(pk_col)
             .ok_or_else(|| format!("Missing PK metadata: {pk_col}"))?;
-        q = bind_typed_value(q, pk_type, pk_val)?;
+        q = bind_typed_value(q, &pk_meta.data_type, pk_val)?;
     }
 
     q.execute(&pool)
@@ -927,38 +1070,79 @@ pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlRe
     }
 }
 
+/// Hard row cap for ad-hoc SQL execution. Prevents OOM on tables with millions of rows.
+const EXECUTE_SQL_MAX_ROWS: usize = 5_000;
+/// Statement timeout for ad-hoc queries (milliseconds).
+const EXECUTE_SQL_TIMEOUT_MS: i64 = 30_000;
+
 async fn execute_sql_pg(pool: &sqlx::PgPool, sql: &str) -> Result<SqlResult, String> {
     let started = std::time::Instant::now();
     let query_ms = || started.elapsed().as_millis() as u64;
 
     if is_row_returning_sql(sql) {
-        let rows = sqlx::query(sql)
-            .fetch_all(pool)
+        // Use a transaction so SET LOCAL statement_timeout is scoped to this query only.
+        let mut tx = pool
+            .begin()
             .await
-            .map_err(|e| format!("Query failed: {e}"))?;
+            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let columns = if let Some(first) = rows.first() {
-            first
-                .columns()
-                .iter()
-                .map(|c| ColumnInfo {
-                    name: c.name().to_string(),
-                    data_type: pg_type_label(c.type_info().name()),
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-        let data: Vec<Vec<Value>> = rows
+        // Kill the query server-side if it runs too long — prevents blocking the pool.
+        let _ = sqlx::query(&format!("SET LOCAL statement_timeout = {EXECUTE_SQL_TIMEOUT_MS}"))
+            .execute(&mut *tx)
+            .await;
+
+        // Stream rows and stop at the cap — never pulls the full result set into memory.
+        let mut stream = sqlx::query(sql).fetch(&mut *tx);
+        let mut pg_rows: Vec<sqlx::postgres::PgRow> = Vec::new();
+        let mut capped = false;
+
+        loop {
+            match stream.try_next().await {
+                Ok(Some(row)) => {
+                    pg_rows.push(row);
+                    if pg_rows.len() >= EXECUTE_SQL_MAX_ROWS {
+                        capped = true;
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(stream);
+                    let _ = tx.rollback().await;
+                    return Err(format!("Query failed: {e}"));
+                }
+            }
+        }
+        drop(stream);
+        let _ = tx.rollback().await;
+
+        let columns: Vec<ColumnInfo> = pg_rows
+            .first()
+            .map(|r| {
+                r.columns()
+                    .iter()
+                    .map(|c| ColumnInfo::new(c.name(), pg_type_label(c.type_info().name())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let data: Vec<Vec<Value>> = pg_rows
             .iter()
             .map(|row| (0..row.len()).map(|i| cell_to_json(row, i)).collect())
             .collect();
+
         let row_count = data.len() as i64;
         return Ok(SqlResult {
             columns,
             rows: data,
             row_count: Some(row_count),
-            message: None,
+            message: if capped {
+                Some(format!(
+                    "Showing first {EXECUTE_SQL_MAX_ROWS} rows — query returned more. Add a LIMIT clause to fetch a specific range."
+                ))
+            } else {
+                None
+            },
             query_ms: query_ms(),
         });
     }

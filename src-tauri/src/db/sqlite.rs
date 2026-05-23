@@ -1,7 +1,10 @@
 use super::query::{ColumnInfo, ForeignKeyInfo, SqlResult, TableRows};
+use futures::TryStreamExt;
 use serde_json::{json, Value};
 use sqlx::{Column, Row, SqlitePool, TypeInfo};
 use std::time::Instant;
+
+const EXECUTE_SQL_MAX_ROWS: usize = 5_000;
 
 // ── Cell conversion ───────────────────────────────────────────────────────────
 
@@ -96,25 +99,39 @@ pub async fn execute_sql(pool: &SqlitePool, sql: &str) -> Result<SqlResult, Stri
         .to_ascii_lowercase();
 
     if matches!(head.as_str(), "select" | "with" | "pragma" | "explain" | "values") {
-        let rows = sqlx::query(sql)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("{e}"))?;
+        let mut stream = sqlx::query(sql).fetch(pool);
+        let mut sqlite_rows: Vec<sqlx::sqlite::SqliteRow> = Vec::new();
+        let mut capped = false;
 
-        let columns: Vec<ColumnInfo> = rows
+        loop {
+            match stream.try_next().await {
+                Ok(Some(row)) => {
+                    sqlite_rows.push(row);
+                    if sqlite_rows.len() >= EXECUTE_SQL_MAX_ROWS {
+                        capped = true;
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(stream);
+                    return Err(format!("{e}"));
+                }
+            }
+        }
+        drop(stream);
+
+        let columns: Vec<ColumnInfo> = sqlite_rows
             .first()
             .map(|r| {
                 r.columns()
                     .iter()
-                    .map(|c| ColumnInfo {
-                        name: c.name().to_string(),
-                        data_type: c.type_info().name().to_lowercase(),
-                    })
+                    .map(|c| ColumnInfo::new(c.name(), c.type_info().name().to_lowercase()))
                     .collect()
             })
             .unwrap_or_default();
 
-        let data: Vec<Vec<Value>> = rows
+        let data: Vec<Vec<Value>> = sqlite_rows
             .iter()
             .map(|r| (0..columns.len()).map(|i| cell_to_json(r, i)).collect())
             .collect();
@@ -124,7 +141,13 @@ pub async fn execute_sql(pool: &SqlitePool, sql: &str) -> Result<SqlResult, Stri
             columns,
             rows: data,
             row_count: Some(n),
-            message: None,
+            message: if capped {
+                Some(format!(
+                    "Showing first {EXECUTE_SQL_MAX_ROWS} rows — query returned more. Add a LIMIT clause to fetch a specific range."
+                ))
+            } else {
+                None
+            },
             query_ms: t0.elapsed().as_millis() as u64,
         })
     } else {
@@ -165,6 +188,16 @@ pub async fn get_table_rows(
         .fetch_all(pool)
         .await
         .map_err(|e| format!("PRAGMA table_info: {e}"))?;
+
+    // col_name -> nullable (notnull=0 means nullable)
+    let pragma_nullable: std::collections::HashMap<String, bool> = pragma_rows
+        .iter()
+        .filter_map(|r| {
+            let name = r.try_get::<Option<String>, _>(1).ok().flatten()?;
+            let notnull: i64 = r.try_get(3).ok()?;
+            Some((name, notnull == 0))
+        })
+        .collect();
 
     let col_names: Vec<String> = pragma_rows
         .iter()
@@ -251,16 +284,25 @@ pub async fn get_table_rows(
         .map(|r| {
             r.columns()
                 .iter()
-                .map(|c| ColumnInfo {
-                    name: c.name().to_string(),
-                    data_type: c.type_info().name().to_lowercase(),
+                .map(|c| {
+                    let mut col = ColumnInfo::new(c.name(), c.type_info().name().to_lowercase());
+                    if let Some(&nullable) = pragma_nullable.get(c.name()) {
+                        col.nullable = nullable;
+                    }
+                    col
                 })
                 .collect()
         })
         .unwrap_or_else(|| {
             col_names
                 .iter()
-                .map(|n| ColumnInfo { name: n.clone(), data_type: "text".to_string() })
+                .map(|n| {
+                    let mut col = ColumnInfo::new(n.clone(), "text");
+                    if let Some(&nullable) = pragma_nullable.get(n.as_str()) {
+                        col.nullable = nullable;
+                    }
+                    col
+                })
                 .collect()
         });
 

@@ -110,7 +110,10 @@
               >
                 <Table2 class="size-4 opacity-60" />
                 <span class="min-w-0 truncate font-mono">{table.name}</span>
-                <span class="shrink-0 font-mono text-ui-xs tabular-nums text-muted-foreground">
+                <span
+                  class="shrink-0 font-mono text-ui-xs tabular-nums text-muted-foreground"
+                  title={table.rowCount != null ? Number(table.rowCount).toLocaleString('en-US') : undefined}
+                >
                   {formatTableRowCount(table.rowCount)}
                 </span>
               </Command.Item>

@@ -2,20 +2,20 @@ import * as monaco from 'monaco-editor'
 
 let defined = false
 
-/** Editor chrome colors (hex) — kept in sync with app.css surfaces. */
+/** Editor chrome colors (hex) — kept in sync with app.css :root warm light palette. */
 const light = {
-  background: '#fafafa',
-  foreground: '#1a1a1a',
-  lineNumber: '#9ca3af',
-  lineNumberActive: '#4b5563',
-  lineHighlight: '#f3f4f6',
-  selection: '#bfdbfe99',
-  selectionInactive: '#dbeafe66',
-  cursor: '#171717',
-  widgetBg: '#ffffff',
-  widgetBorder: '#e5e7eb',
-  indent: '#e5e7eb',
-  indentActive: '#d1d5db',
+  background: '#fffdf7',
+  foreground: '#393a34',
+  lineNumber: '#a8a29e',
+  lineNumberActive: '#57534e',
+  lineHighlight: '#f0ede4',
+  selection: '#393a3420',
+  selectionInactive: '#393a3410',
+  cursor: '#393a34',
+  widgetBg: '#fffdf7',
+  widgetBorder: '#dfd9ce',
+  indent: '#e5e0d6',
+  indentActive: '#d4cec2',
 }
 
 const dark = {
@@ -42,16 +42,16 @@ export function defineDbStudioMonacoThemes() {
     base: 'vs',
     inherit: true,
     rules: [
-      { token: 'comment', foreground: '6b7280', fontStyle: 'italic' },
-      { token: 'string', foreground: '047857' },
-      { token: 'string.sql', foreground: '047857' },
-      { token: 'number', foreground: '0369a1' },
-      { token: 'number.float', foreground: '0369a1' },
-      { token: 'keyword', foreground: '7c3aed' },
-      { token: 'keyword.sql', foreground: '7c3aed' },
-      { token: 'operator', foreground: '374151' },
-      { token: 'delimiter', foreground: '374151' },
-      { token: 'identifier', foreground: '1a1a1a' },
+      { token: 'comment', foreground: 'a0a096', fontStyle: 'italic' },
+      { token: 'string', foreground: '1e754f' },
+      { token: 'string.sql', foreground: '1e754f' },
+      { token: 'number', foreground: '2993a3' },
+      { token: 'number.float', foreground: '2993a3' },
+      { token: 'keyword', foreground: 'a65e2b' },
+      { token: 'keyword.sql', foreground: 'a65e2b' },
+      { token: 'operator', foreground: '4e4f47' },
+      { token: 'delimiter', foreground: '4e4f47' },
+      { token: 'identifier', foreground: '393a34' },
     ],
     colors: {
       'editor.background': light.background,
@@ -67,8 +67,8 @@ export function defineDbStudioMonacoThemes() {
       'editorWidget.border': light.widgetBorder,
       'editorIndentGuide.background': light.indent,
       'editorIndentGuide.activeBackground': light.indentActive,
-      'editorBracketMatch.background': '#e5e7eb88',
-      'editorBracketMatch.border': '#9ca3af',
+      'editorBracketMatch.background': '#e5e0d688',
+      'editorBracketMatch.border': '#a8a29e',
     },
   })
 

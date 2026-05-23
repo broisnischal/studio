@@ -1,58 +1,107 @@
 <script>
-  import Shimmer from './Shimmer.svelte'
   import { cn } from '$lib/utils.js'
+  import { defaultColumnWidth } from '$lib/table-column-widths.js'
 
   let {
+    columns = [],
+    /** @type {Record<string, number>} */
+    columnWidths = {},
     columnCount = 6,
     rowCount = 14,
+    showRowExpand = true,
+    showSelection = true,
   } = $props()
 
-  const cols = $derived(Math.max(1, Math.min(columnCount, 12)))
-  const cellWidths = ['w-[70%]', 'w-[55%]', 'w-[80%]', 'w-[45%]', 'w-[65%]', 'w-[90%]', 'w-[50%]']
+  const displayColumns = $derived(
+    columns.length > 0
+      ? columns
+      : Array.from({ length: Math.max(1, Math.min(columnCount, 10)) }, (_, i) => ({
+          name: `col-${i}`,
+          data_type: 'text',
+        })),
+  )
+
+  /** @param {{ name: string, dataType?: string, data_type?: string }} col */
+  function colWidth(col) {
+    return columnWidths[col.name] ?? defaultColumnWidth(col.dataType ?? col.data_type ?? '')
+  }
+
+  /** Bar widths as fraction of cell — short left-aligned pills like real cell text */
+  const barFracs = [0.52, 0.68, 0.41, 0.76, 0.48, 0.61, 0.55, 0.37, 0.72, 0.44]
+
+  /** @param {number} rowIdx @param {number} colIdx */
+  function barStyle(rowIdx, colIdx) {
+    const frac = barFracs[(rowIdx + colIdx) % barFracs.length]
+    return `width: ${Math.round(frac * 100)}%`
+  }
 </script>
 
-<div
-  class="flex h-full min-h-[240px] w-full min-w-full flex-col"
-  role="status"
-  aria-label="Loading rows"
->
-  <div class="sticky top-0 z-10 flex w-full min-w-full border-b border-border bg-panel">
-    <div class="flex w-9 shrink-0 items-center px-2 py-2.5">
-      <Shimmer class="size-3.5 rounded-sm" rounded="sm" />
-    </div>
-    {#each Array(cols) as _, colIdx}
-      <div
-        class="min-w-[100px] flex-1 border-r border-border/50 px-3 py-2 last:border-r-0"
-        style:max-width={colIdx === cols - 1 ? undefined : '220px'}
-      >
-        <Shimmer class="mb-1.5 h-3 w-[75%] rounded-sm" rounded="sm" />
-        <Shimmer class="h-2.5 w-[45%] rounded-sm" rounded="sm" />
-      </div>
-    {/each}
-  </div>
-
-  <div class="flex w-full min-w-full flex-1 flex-col">
-    {#each Array(rowCount) as _, rowIdx}
-      <div
-        class="flex w-full min-w-full border-b border-border/30"
-        style:opacity={String(1 - rowIdx * 0.04)}
-      >
-        <div class="flex w-9 shrink-0 items-center px-2 py-2">
-          <Shimmer class="size-3.5 rounded-sm" rounded="sm" />
-        </div>
-        {#each Array(cols) as _, colIdx}
-          <div
-            class="flex min-w-[100px] flex-1 items-center border-r border-border/20 px-3 py-2 last:border-r-0"
-            style:max-width={colIdx === cols - 1 ? undefined : '220px'}
+<div class="min-h-0 w-full min-w-full" role="status" aria-label="Loading rows">
+  <table class="studio-data-table w-max min-w-full table-fixed text-ui-sm">
+    <colgroup>
+      {#if showRowExpand}
+        <col style="width: 28px" />
+      {/if}
+      {#if showSelection}
+        <col style="width: 36px" />
+      {/if}
+      {#each displayColumns as col (col.name)}
+        <col style="width: {colWidth(col)}px" />
+      {/each}
+    </colgroup>
+    <thead class="studio-chrome sticky top-0 z-10 bg-panel">
+      <tr>
+        {#if showRowExpand}
+          <th class="w-7 px-0 py-1.5" aria-hidden="true"></th>
+        {/if}
+        {#if showSelection}
+          <th class="w-9 px-2 py-1.5" aria-hidden="true">
+            <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+          </th>
+        {/if}
+        {#each displayColumns as col (col.name)}
+          {@const w = colWidth(col)}
+          <th
+            class="overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal"
+            style="width: {w}px; min-width: {w}px; max-width: {w}px"
+            aria-hidden="true"
           >
-            <Shimmer
-              class={cn('h-3 rounded-sm', cellWidths[(rowIdx + colIdx) % cellWidths.length])}
-              rounded="sm"
-            />
-          </div>
+            <div class="flex min-w-0 flex-col gap-1">
+              <div class="skeleton h-3 max-w-[min(7rem,75%)] rounded-sm" aria-hidden="true"></div>
+              <div class="skeleton h-2 max-w-[min(4.5rem,50%)] rounded-sm opacity-80" aria-hidden="true"></div>
+            </div>
+          </th>
         {/each}
-      </div>
-    {/each}
-  </div>
+      </tr>
+    </thead>
+    <tbody>
+      {#each Array(rowCount) as _, rowIdx}
+        <tr class="border-b border-table-grid">
+          {#if showRowExpand}
+            <td class="w-7 px-0 py-1 align-middle" aria-hidden="true"></td>
+          {/if}
+          {#if showSelection}
+            <td class="w-9 px-2 py-1 align-middle" aria-hidden="true">
+              <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+            </td>
+          {/if}
+          {#each displayColumns as col, colIdx (col.name)}
+            {@const w = colWidth(col)}
+            <td
+              class="overflow-hidden px-3 py-1 align-middle"
+              style="width: {w}px; min-width: {w}px; max-width: {w}px"
+              aria-hidden="true"
+            >
+              <div
+                class={cn('skeleton h-3 rounded-sm')}
+                style={barStyle(rowIdx, colIdx)}
+                aria-hidden="true"
+              ></div>
+            </td>
+          {/each}
+        </tr>
+      {/each}
+    </tbody>
+  </table>
   <span class="sr-only">Loading rows…</span>
 </div>

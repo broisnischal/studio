@@ -4,6 +4,8 @@
   import { Checkbox } from '$lib/components/ui/checkbox/index.js'
   import * as ContextMenu from '$lib/components/ui/context-menu/index.js'
   import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down'
+  import ChevronRight from '@lucide/svelte/icons/chevron-right'
+  import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import Copy from '@lucide/svelte/icons/copy'
   import Pencil from '@lucide/svelte/icons/pencil'
   import CircleSlash from '@lucide/svelte/icons/circle-slash'
@@ -17,8 +19,18 @@
     findForeignKeyForColumn,
     foreignKeyTargetLabel,
   } from '$lib/foreign-key-nav.js'
-  import DataTableSkeleton from './DataTableSkeleton.svelte'
-  import { overlayPointerPosition } from '$lib/app-zoom.js'
+  import TableLoading from './TableLoading.svelte'
+  import MiniJsonViewer from './MiniJsonViewer.svelte'
+  import ColumnResizeHandle from './ColumnResizeHandle.svelte'
+  import {
+    loadColumnWidths,
+    saveColumnWidths,
+  } from '$lib/stores/table-column-widths.js'
+  import {
+    clampColumnWidth,
+    defaultColumnWidth,
+  } from '$lib/table-column-widths.js'
+  import { formatCompactCount } from '$lib/table-list.js'
   import { cn } from '$lib/utils.js'
   import {
     formatJsonValue,
@@ -26,6 +38,8 @@
     rowToRecord,
   } from '$lib/row-inspector.js'
   import {
+    getColumnEnumValues,
+    isBooleanType,
     isEditableType,
     parseCellInput,
     valueToEditString,
@@ -58,27 +72,29 @@
     ondelete = async () => {},
     /** @param {{ rowIdx: number, colIdx: number }} detail */
     onfollowforeignkey = () => {},
+    /** Compact layout for AI chat / nested panels */
+    embedded = false,
+    showSelection = true,
+    showRowExpand = true,
+    /** Persist column widths per table, e.g. "public.users" */
+    columnWidthsKey = undefined,
   } = $props()
 
-  /** @type {HTMLInputElement | null} */
+  /** @type {HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null} */
   let editInput = $state(null)
   let contextRowIdx = $state(0)
   let contextColIdx = $state(0)
   let contextMenuOpen = $state(false)
   let pendingContextMenu = $state(false)
-  /** @type {{ x: number, y: number } | null} */
-  let contextMenuPointer = $state(null)
   /** Block item activation from the right-click pointerup that opened the menu */
   let suppressMenuSelect = $state(false)
-
-  /** Anchor for portaled context menu (body portal) */
-  const contextMenuAnchor = {
-    getBoundingClientRect() {
-      const p = contextMenuPointer
-      if (!p) return new DOMRect(0, 0, 0, 0)
-      return new DOMRect(p.x, p.y, 0, 0)
-    },
-  }
+  /** Row indices with inline JSON detail open */
+  let expandedRows = $state(new Set())
+  /** @type {Record<string, number>} */
+  let columnWidths = $state({})
+  /** @type {string | null} */
+  let resizingColName = $state(null)
+  let resizeStartWidth = 0
 
   function canEditColumn(colIdx) {
     const col = columns[colIdx]
@@ -156,27 +172,7 @@
   }
 
   /** @param {MouseEvent} e */
-  function prepareContextMenu(e) {
-    const target = e.target
-    if (!(target instanceof Element)) return
 
-    const rowEl = target.closest('[data-row-idx]')
-    if (!rowEl) {
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-
-    const rowIdx = Number(rowEl.getAttribute('data-row-idx'))
-    if (!Number.isFinite(rowIdx)) return
-
-    pendingContextMenu = true
-    contextRowIdx = rowIdx
-
-    const cellEl = target.closest('td[data-col-idx]')
-    contextColIdx = cellEl ? Number(cellEl.getAttribute('data-col-idx')) || 0 : 0
-    contextMenuPointer = overlayPointerPosition(e.clientX, e.clientY)
-  }
 
   function startEdit(rowIdx, colIdx) {
     const col = columns[colIdx]
@@ -224,7 +220,11 @@
       return
     }
 
-    const parsed = parseCellInput(draft, col.dataType ?? col.data_type ?? 'text')
+    const parsed = parseCellInput(
+      draft,
+      col.dataType ?? col.data_type ?? 'text',
+      getColumnEnumValues(col),
+    )
     if (!parsed.ok) {
       toast.error('Invalid value', { description: parsed.message })
       return
@@ -294,7 +294,7 @@
     try {
       await ondelete({ rowIndices })
       const n = rowIndices.length
-      toast.success(n === 1 ? 'Row deleted' : `${n} rows deleted`)
+      toast.success(n === 1 ? 'Row deleted' : `${formatCompactCount(n)} rows deleted`)
     } catch (err) {
       toast.error('Delete failed', { description: String(err) })
     }
@@ -306,8 +306,10 @@
       const el = editInput
       if (!el) return
       el.focus()
-      const len = el.value.length
-      el.setSelectionRange(len, len)
+      if (el instanceof HTMLInputElement) {
+        const len = el.value.length
+        el.setSelectionRange(len, len)
+      }
     })
   })
 
@@ -341,6 +343,22 @@
     selected = next
   }
 
+  /** @param {number} rowIdx */
+  function isRowExpanded(rowIdx) {
+    return expandedRows.has(rowIdx)
+  }
+
+  /** @param {number} rowIdx */
+  function toggleRowExpand(rowIdx) {
+    const next = new Set(expandedRows)
+    if (next.has(rowIdx)) next.delete(rowIdx)
+    else next.add(rowIdx)
+    expandedRows = next
+  }
+
+  const gutterColCount = $derived((showRowExpand ? 1 : 0) + (showSelection ? 1 : 0))
+  const tableColSpan = $derived(gutterColCount + columns.length)
+
   const allSelected = $derived(rows.length > 0 && selected.size === rows.length)
   const someSelected = $derived(selected.size > 0 && selected.size < rows.length)
   const hasPrimaryKey = $derived(primaryKey.length > 0)
@@ -349,27 +367,59 @@
   function rowClass(idx) {
     const isFocused = focusedRow === idx
     const isSelected = selected.has(idx)
+    const isExpanded = isRowExpanded(idx)
     return cn(
-      'border-b border-border/40 outline-none transition-colors hover:bg-accent/25',
+      'group/row outline-none transition-colors hover:bg-accent/25',
+      isExpanded && '[&>td]:border-b-0',
       isSelected && 'bg-accent/20',
       isFocused && !isSelected && 'bg-accent/15',
       isFocused && isSelected && 'ring-1 ring-ring/60 ring-inset',
     )
   }
 
-  /** @param {string} dataType */
-  function cellMaxWidthClass(dataType) {
-    const t = dataType.toLowerCase()
-    if (t.includes('json') || t === 'jsonb') return 'max-w-md'
-    if (t.includes('text') || t.includes('char') || t.includes('uuid')) return 'max-w-sm'
-    return 'max-w-xs'
+  /** @param {string} name @param {string} dataType */
+  function widthForColumn(name, dataType) {
+    return columnWidths[name] ?? defaultColumnWidth(dataType)
+  }
+
+  $effect(() => {
+    const key = columnWidthsKey
+    const cols = columns
+    const stored = key ? loadColumnWidths(key) : {}
+    /** @type {Record<string, number>} */
+    const next = {}
+    for (const col of cols) {
+      const dt = col.dataType ?? col.data_type ?? ''
+      next[col.name] = clampColumnWidth(stored[col.name] ?? defaultColumnWidth(dt))
+    }
+    columnWidths = next
+  })
+
+  /** @param {string} colName */
+  function startColumnResize(colName) {
+    resizingColName = colName
+    resizeStartWidth = columnWidths[colName] ?? defaultColumnWidth('')
+  }
+
+  /** @param {number} dx */
+  function applyColumnResize(dx) {
+    if (!resizingColName) return
+    columnWidths = {
+      ...columnWidths,
+      [resizingColName]: clampColumnWidth(resizeStartWidth + dx),
+    }
+  }
+
+  function endColumnResize() {
+    if (resizingColName && columnWidthsKey) {
+      saveColumnWidths(columnWidthsKey, columnWidths)
+    }
+    resizingColName = null
   }
 </script>
 
 {#if loading}
-  <div class="app-scroll min-h-0 flex-1 overflow-auto bg-panel">
-    <DataTableSkeleton columnCount={columns.length || 6} />
-  </div>
+  <TableLoading {embedded} />
 {:else}
   <ContextMenu.Root
     onOpenChange={(open) => {
@@ -378,46 +428,95 @@
         armMenuSelectGuard()
       } else {
         pendingContextMenu = false
-        contextMenuPointer = null
         suppressMenuSelect = false
       }
     }}
   >
     <ContextMenu.Trigger disabled={rows.length === 0}>
       {#snippet child({ props })}
+        {@const bitsContextMenu = props.oncontextmenu}
         <div
           {...props}
-          class="app-scroll relative min-h-0 flex-1 overflow-auto bg-panel"
-          oncontextmenucapture={prepareContextMenu}
+          tabindex={-1}
+          class={cn(
+            'app-scroll relative overflow-auto bg-panel select-none',
+            embedded ? 'max-h-80' : 'min-h-0 flex-1',
+            resizingColName && 'cursor-col-resize',
+          )}
+          oncontextmenu={(e) => {
+            const target = e.target
+            if (!(target instanceof Element)) { e.preventDefault(); return }
+            const rowEl = target.closest('[data-row-idx]')
+            if (!rowEl) { e.preventDefault(); return }
+            const rowIdx = Number(rowEl.getAttribute('data-row-idx'))
+            if (!Number.isFinite(rowIdx)) { e.preventDefault(); return }
+            // Capture which row/col was right-clicked
+            pendingContextMenu = true
+            contextRowIdx = rowIdx
+            const cellEl = target.closest('td[data-col-idx]')
+            contextColIdx = cellEl ? Number(cellEl.getAttribute('data-col-idx')) || 0 : 0
+            // Hand off to bits-ui to open the menu
+            bitsContextMenu?.(e)
+          }}
+          onkeydown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a') e.preventDefault()
+          }}
         >
-          <table class="w-max min-w-full border-collapse text-ui-sm">
-            <thead class="sticky top-0 z-10 bg-panel">
-              <tr class="border-b border-border">
-                <th class="w-9 px-2 py-1.5 text-left font-normal">
-                  <Checkbox
-                    checked={allSelected}
-                    indeterminate={someSelected}
-                    onCheckedChange={(v) => toggleAll(v === true)}
-                  />
-                </th>
-                {#each columns as col}
+          <table class="studio-data-table w-max min-w-full table-fixed text-ui-sm">
+            <colgroup>
+              {#if showRowExpand}
+                <col style="width: 28px" />
+              {/if}
+              {#if showSelection}
+                <col style="width: 36px" />
+              {/if}
+              {#each columns as col (col.name)}
+                <col style="width: {widthForColumn(col.name, col.dataType ?? col.data_type ?? '')}px" />
+              {/each}
+            </colgroup>
+            <thead class="studio-chrome sticky top-0 z-10 bg-panel">
+              <tr>
+                {#if showRowExpand}
+                  <th class="w-7 px-0 py-1.5" aria-label="Expand row"></th>
+                {/if}
+                {#if showSelection}
+                  <th class="w-9 px-2 py-1.5 text-left font-normal">
+                    <Checkbox
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      onCheckedChange={(v) => toggleAll(v === true)}
+                    />
+                  </th>
+                {/if}
+                {#each columns as col (col.name)}
+                  {@const colW = widthForColumn(col.name, col.dataType ?? col.data_type ?? '')}
                   <th
                     class={cn(
-                      'whitespace-nowrap border-r border-border/60 px-3 py-1.5 text-left font-normal last:border-r-0',
-                      cellMaxWidthClass(col.dataType ?? col.data_type ?? ''),
+                      'relative overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal',
+                      resizingColName === col.name && 'bg-accent/30',
                     )}
+                    style="width: {colW}px; min-width: {colW}px; max-width: {colW}px"
                   >
-                    <div class="flex items-start gap-2">
-                      <div class="flex flex-col gap-0.5">
-                        <span class="font-mono text-ui-sm text-foreground" data-font="mono"
-                          >{col.name}</span
+                    <div class="flex min-w-0 items-start gap-2">
+                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span
+                          class="block truncate font-mono text-ui-sm text-foreground"
+                          data-font="mono"
+                          title={col.name}>{col.name}</span
                         >
-                        <span class="font-mono text-ui-2xs text-muted-foreground" data-font="mono"
-                          >{col.dataType}</span
+                        <span
+                          class="block truncate font-mono text-ui-2xs text-muted-foreground"
+                          data-font="mono"
+                          title={col.dataType ?? col.data_type}>{col.dataType ?? col.data_type}</span
                         >
                       </div>
                       <ArrowUpDown class="mt-0.5 size-3 shrink-0 opacity-30" />
                     </div>
+                    <ColumnResizeHandle
+                      onresizestart={() => startColumnResize(col.name)}
+                      onresize={applyColumnResize}
+                      onresizeend={endColumnResize}
+                    />
                   </th>
                 {/each}
               </tr>
@@ -427,7 +526,6 @@
                 {#each rows as row, idx}
                   <tr
                     data-row-idx={idx}
-                    tabindex={editingCell ? -1 : 0}
                     class={rowClass(idx)}
                     onclick={(e) => {
                       if (e.button !== 0) return
@@ -441,34 +539,57 @@
                       const colIdx = Number(cellEl.getAttribute('data-col-idx')) || 0
                       if (tryFollowForeignKey(idx, colIdx, e)) return
                     }}
-                    onfocus={() => {
-                      if (contextMenuOpen || pendingContextMenu) return
-                      focusRow(idx)
-                    }}
                   >
-                    <td class="w-9 px-2 py-1" onclick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={selected.has(idx)}
-                        onCheckedChange={() => toggleRow(idx)}
-                      />
-                    </td>
+                    {#if showRowExpand}
+                      <td class="w-7 px-0 py-1 align-middle" onclick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          tabindex={-1}
+                          class={cn(
+                            'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,background-color,color] hover:bg-accent hover:text-foreground group-hover/row:opacity-100',
+                            isRowExpanded(idx) && 'opacity-100',
+                          )}
+                          aria-expanded={isRowExpanded(idx)}
+                          aria-label={isRowExpanded(idx) ? 'Collapse row JSON' : 'Expand row JSON'}
+                          title={isRowExpanded(idx) ? 'Collapse row' : 'Expand row as JSON'}
+                          onclick={() => toggleRowExpand(idx)}
+                        >
+                          {#if isRowExpanded(idx)}
+                            <ChevronDown class="size-3.5" />
+                          {:else}
+                            <ChevronRight class="size-3.5" />
+                          {/if}
+                        </button>
+                      </td>
+                    {/if}
+                    {#if showSelection}
+                      <td class="w-9 px-2 py-1" onclick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          tabindex={-1}
+                          checked={selected.has(idx)}
+                          onCheckedChange={() => toggleRow(idx)}
+                        />
+                      </td>
+                    {/if}
                     {#each row as cell, colIdx}
                       {@const isEditing =
                         editingCell?.rowIdx === idx && editingCell?.colIdx === colIdx}
                       {@const col = columns[colIdx]}
+                      {@const colType = col?.dataType ?? col?.data_type ?? ''}
+                      {@const enumValues = getColumnEnumValues(col)}
                       {@const cellFk = foreignKeyForCell(idx, colIdx)}
                       <td
                         data-col-idx={colIdx}
                         class={cn(
-                          'border-r border-border/30 font-mono last:border-r-0',
-                          col && cellMaxWidthClass(col.dataType ?? col.data_type ?? ''),
+                          'overflow-hidden font-mono',
                           isEditing
                             ? 'relative p-0 align-middle ring-2 ring-inset ring-primary bg-background'
                             : 'whitespace-nowrap px-3 py-1 text-muted-foreground',
                           cellFk &&
                             !isEditing &&
-                            'group/fk cursor-pointer bg-accent/15 ring-1 ring-inset ring-ring/50 transition-colors hover:bg-accent/25 hover:ring-ring/70',
+                            'group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30',
                         )}
+                        style={isEditing ? 'border: 0' : undefined}
                         data-font="mono"
                         onclick={(e) => {
                           if (tryFollowForeignKey(idx, colIdx, e, { requireModifier: true })) return
@@ -490,15 +611,70 @@
                         }}
                       >
                         {#if isEditing && editingCell}
-                          <input
-                            bind:this={editInput}
-                            bind:value={editingCell.draft}
-                            disabled={saving}
-                            aria-label="Edit {col?.name ?? 'cell'}"
-                            class="box-border block h-7 w-full min-w-0 max-w-full overflow-x-auto border-0 bg-transparent px-3 py-1 font-mono text-ui-sm text-foreground outline-none [field-sizing:fixed] selection:bg-primary/20"
-                            onclick={(e) => e.stopPropagation()}
-                            onkeydown={handleEditKeydown}
-                          />
+                          {@const isNullable = col?.nullable ?? true}
+                          {#if enumValues}
+                            <select
+                              bind:this={editInput}
+                              bind:value={editingCell.draft}
+                              disabled={saving}
+                              aria-label="Edit {col?.name ?? 'cell'}"
+                              class="box-border block h-7 w-full min-w-0 max-w-full cursor-pointer appearance-none border-0 bg-transparent px-3 py-1 font-mono text-ui-sm text-foreground outline-none"
+                              onclick={(e) => e.stopPropagation()}
+                              onkeydown={handleEditKeydown}
+                              onchange={() => void commitEdit()}
+                            >
+                              {#if isNullable}
+                                <option value="">NULL</option>
+                              {/if}
+                              {#if editingCell.original && !enumValues.includes(editingCell.original)}
+                                <option value={editingCell.original}>{editingCell.original}</option>
+                              {/if}
+                              {#each enumValues as option (option)}
+                                <option value={option}>{option}</option>
+                              {/each}
+                            </select>
+                          {:else if isBooleanType(colType)}
+                            {@const isOn = editingCell.draft === 'true'}
+                            {@const isNull = isNullable && editingCell.draft !== 'true' && editingCell.draft !== 'false'}
+                            <button
+                              type="button"
+                              bind:this={editInput}
+                              disabled={saving}
+                              aria-label="Toggle {col?.name ?? 'cell'}"
+                              class="flex h-7 w-full items-center gap-2.5 px-3 font-mono text-ui-sm text-foreground outline-none"
+                              onclick={async (e) => {
+                                e.stopPropagation()
+                                editingCell.draft = editingCell.draft === 'true' ? 'false' : 'true'
+                                await commitEdit()
+                              }}
+                              onkeydown={handleEditKeydown}
+                            >
+                              <span
+                                class={cn(
+                                  'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150',
+                                  isOn ? 'bg-primary/80' : 'bg-muted-foreground/30',
+                                )}
+                              >
+                                <span
+                                  class="absolute size-3 rounded-full bg-white shadow-sm transition-transform duration-150"
+                                  style={isOn ? 'transform: translateX(14px)' : 'transform: translateX(2px)'}
+                                ></span>
+                              </span>
+                              <span class={isNull ? 'text-muted-foreground' : ''}
+                                >{isNull ? 'NULL' : editingCell.draft === 'true' ? 'true' : 'false'}</span
+                              >
+                            </button>
+                          {:else}
+                            <input
+                              bind:this={editInput}
+                              bind:value={editingCell.draft}
+                              disabled={saving}
+                              aria-label="Edit {col?.name ?? 'cell'}"
+                              class="box-border block h-7 w-full min-w-0 max-w-full overflow-x-auto border-0 bg-transparent px-3 py-1 font-mono text-ui-sm text-foreground outline-none [field-sizing:fixed] selection:bg-primary/20"
+                              onclick={(e) => e.stopPropagation()}
+                              onkeydown={handleEditKeydown}
+                            />
+                          {/if}
                         {:else}
                           {@const cellText = formatCell(cell)}
                           {@const cellHref = !cellFk ? cellLinkHref(cellText) : null}
@@ -514,7 +690,9 @@
                             {#if cellHref}
                               <a
                                 href={cellHref}
-                                class="truncate text-link underline underline-offset-2 decoration-link/45 hover:text-link-hover hover:decoration-link"
+                                data-cell-url
+                                tabindex={-1}
+                                class="truncate"
                                 onclick={(e) => e.stopPropagation()}
                               >
                                 {cellText}
@@ -533,6 +711,18 @@
                       </td>
                     {/each}
                   </tr>
+                  {#if showRowExpand && isRowExpanded(idx)}
+                    <tr class="bg-muted/15">
+                      <td colspan={tableColSpan} class="p-0 align-top">
+                        <div class="px-2 py-2 sm:px-3">
+                          <MiniJsonViewer
+                            value={rowToRecord(columns, row)}
+                            maxHeight={embedded ? 'min(40vh, 12rem)' : 'min(50vh, 20rem)'}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  {/if}
                 {/each}
             </tbody>
             {/if}
@@ -554,11 +744,6 @@
     </ContextMenu.Trigger>
 
     <ContextMenu.Content
-      customAnchor={contextMenuAnchor}
-      strategy="fixed"
-      side="bottom"
-      align="start"
-      sideOffset={4}
       onOpenAutoFocus={(e) => e.preventDefault()}
       class={cn(
         'w-max min-w-32 p-0.5 text-ui-xs',
@@ -604,6 +789,12 @@
         <CircleSlash />
         Set NULL
       </ContextMenu.Item>
+      {#if showRowExpand}
+        <ContextMenu.Item onSelect={() => runMenuAction(() => toggleRowExpand(contextRowIdx))}>
+          <Braces />
+          {isRowExpanded(contextRowIdx) ? 'Collapse row JSON' : 'Expand row JSON'}
+        </ContextMenu.Item>
+      {/if}
       <ContextMenu.Separator />
       <ContextMenu.Item onSelect={() => runMenuAction(() => copyRowJson(contextRowIdx))}>
         <Braces />
@@ -621,7 +812,7 @@
       >
         <Trash2 />
         {selected.size > 1 && selected.has(contextRowIdx)
-          ? `Delete ${selected.size} rows`
+          ? `Delete ${formatCompactCount(selected.size)} rows`
           : 'Delete row'}
         <ContextMenu.Shortcut>⌘⌫</ContextMenu.Shortcut>
       </ContextMenu.Item>

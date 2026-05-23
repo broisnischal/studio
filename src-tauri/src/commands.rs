@@ -1,3 +1,9 @@
+/// Restart the application — called after an update is installed.
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
 /// Toggle the WebView developer tools. Only functional in debug builds;
 /// in release builds this is a no-op so the command stays safe to expose.
 #[tauri::command]

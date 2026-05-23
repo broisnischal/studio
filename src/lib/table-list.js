@@ -1,10 +1,37 @@
 /**
+ * Compact count: 999, 1.5k, 10k, 1.2M
  * @param {number | string | null | undefined} count
  */
-export function formatTableRowCount(count) {
+export function formatCompactCount(count) {
   const n = Number(count)
-  if (!Number.isFinite(n) || n < 0) return '—'
-  return n.toLocaleString()
+  if (!Number.isFinite(n)) return '—'
+
+  const abs = Math.abs(n)
+  const sign = n < 0 ? '-' : ''
+
+  if (abs < 1000) return sign + abs.toLocaleString('en-US')
+
+  /**
+   * @param {number} value
+   * @param {number} divisor
+   * @param {string} suffix
+   */
+  function withSuffix(value, divisor, suffix) {
+    const v = value / divisor
+    if (v >= 100) return sign + Math.round(v) + suffix
+    if (v >= 10) return sign + Math.round(v) + suffix
+    const rounded = Math.round(v * 10) / 10
+    const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
+    return sign + text + suffix
+  }
+
+  if (abs < 1_000_000) return withSuffix(abs, 1000, 'k')
+  return withSuffix(abs, 1_000_000, 'M')
+}
+
+/** @param {number | string | null | undefined} count */
+export function formatTableRowCount(count) {
+  return formatCompactCount(count)
 }
 
 /**

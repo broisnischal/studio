@@ -14,6 +14,15 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5NDM4RjkyM0Q0MzE2RjIKUldUeUZrTTlrbzlEYVRYVmFnTWJmem95cFJVaHo5VHJJSW1ZaldHN2FQZ1NqWEdUTWo0NE5vY3IK",
+      "endpoints": [
+        "https://github.com/broisnischal/studio/releases/latest/download/latest.json"
+      ],
+      "dialog": false
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

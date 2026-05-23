@@ -12,7 +12,6 @@
   import * as Select from '$lib/components/ui/select/index.js'
   import * as Tabs from '$lib/components/ui/tabs/index.js'
   import ResizeHandle from './ResizeHandle.svelte'
-  import TableListSkeleton from './TableListSkeleton.svelte'
   import { cn } from '$lib/utils.js'
   import { formatTableRowCount } from '$lib/table-list.js'
   import {
@@ -44,16 +43,37 @@
     ondisconnect = () => {},
   } = $props()
 
+  let localFilter = $state(tableFilter)
+  let filterDebounce = /** @type {ReturnType<typeof setTimeout> | null} */ (null)
+
+  // Sync from parent when it resets externally (e.g. connection change)
+  $effect(() => {
+    localFilter = tableFilter
+  })
+
+  /** @param {string} value */
+  function handleFilterInput(value) {
+    localFilter = value
+    if (filterDebounce) clearTimeout(filterDebounce)
+    filterDebounce = setTimeout(() => {
+      filterDebounce = null
+      ontablefilter(value)
+    }, 200)
+  }
+
   const filteredTables = $derived(
-    tables.filter((t) => t.name.toLowerCase().includes(tableFilter.toLowerCase())),
+    tables.filter((t) => t.name.toLowerCase().includes(localFilter.toLowerCase())),
   )
 </script>
 
 <div class="flex h-full shrink-0" style:width="{width}px" data-studio-region="sidebar">
-  <aside class="flex h-full min-w-0 flex-1 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+  <aside
+    class="studio-chrome flex h-full min-w-0 flex-1 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+    data-studio-chrome
+  >
   <div class="flex min-h-0 flex-1 flex-col">
     {#if connectionName}
-      <div class="flex h-9 shrink-0 items-center border-b border-sidebar-border px-1.5">
+      <div class="flex h-9 shrink-0 items-center border-b border-sidebar-border px-2">
         <Tabs.Root
           value={activeView}
           onValueChange={(v) => {
@@ -61,10 +81,10 @@
           }}
           class="w-full"
         >
-          <Tabs.List class="grid h-8 w-full grid-cols-2">
+          <Tabs.List class="h-7 w-full gap-0.5 rounded-md bg-muted/50 p-0.5">
             <Tabs.Trigger
               value="table"
-              class="gap-1.5 text-ui-xs"
+              class="h-full flex-1 gap-1.5 rounded-sm text-ui-xs font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground/70"
               title="Data view (⌘⇧D)"
             >
               <Table2 class="size-3 shrink-0 opacity-60" />
@@ -72,7 +92,7 @@
             </Tabs.Trigger>
             <Tabs.Trigger
               value="sql"
-              class="gap-1.5 text-ui-xs"
+              class="h-full flex-1 gap-1.5 rounded-sm text-ui-xs font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground/70"
               title="SQL editor (⌘⇧S)"
             >
               <Terminal class="size-3 shrink-0 opacity-60" />
@@ -117,8 +137,8 @@
         <input
           type="search"
           placeholder=""
-          value={tableFilter}
-          oninput={(e) => ontablefilter(e.currentTarget.value)}
+          value={localFilter}
+          oninput={(e) => handleFilterInput(e.currentTarget.value)}
           class="h-7 w-full rounded-md border border-border bg-background/40 pl-7 pr-2 text-ui-sm outline-none focus:border-border focus:ring-1 focus:ring-ring/30"
         />
       </div>
@@ -155,7 +175,13 @@
       </p>
       <ScrollArea class="min-h-0 w-full flex-1">
         {#if loadingTables}
-          <TableListSkeleton />
+          <div class="flex items-center justify-center py-8" role="status" aria-label="Loading tables">
+            <span class="inline-flex gap-1.5" aria-hidden="true">
+              <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 0ms"></span>
+              <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 150ms"></span>
+              <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 300ms"></span>
+            </span>
+          </div>
         {:else}
         <ul class="flex w-full min-w-full flex-col gap-0.5 px-1.5 pb-2">
           {#if tables.length === 0}
@@ -187,6 +213,7 @@
                   <span class="min-w-0 truncate font-mono text-ui-sm leading-none">{table.name}</span>
                   <span
                     class="shrink-0 font-mono text-ui-xs leading-none tabular-nums text-muted-foreground"
+                    title={table.rowCount != null ? Number(table.rowCount).toLocaleString('en-US') : undefined}
                   >
                     {formatTableRowCount(table.rowCount)}
                   </span>

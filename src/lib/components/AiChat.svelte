@@ -1,9 +1,10 @@
 <script>
   import { tick, onMount, onDestroy } from 'svelte'
-  import { marked } from 'marked'
   import Bot from '@lucide/svelte/icons/bot'
   import Send from '@lucide/svelte/icons/send'
   import Square from '@lucide/svelte/icons/square'
+  import Undo2 from '@lucide/svelte/icons/undo-2'
+  import Redo2 from '@lucide/svelte/icons/redo-2'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Plus from '@lucide/svelte/icons/plus'
@@ -22,8 +23,12 @@
   import { Label } from '$lib/components/ui/label/index.js'
   import { cn } from '$lib/utils.js'
   import { executeSql } from '$lib/api.js'
+  import DataTable from '$lib/components/DataTable.svelte'
+  import AiMarkdown from '$lib/components/AiMarkdown.svelte'
+  import AiSqlBlock from '$lib/components/AiSqlBlock.svelte'
   import {
     chatCompletionStream,
+    MAX_AI_RETRIES,
     AI_TOOLS,
     isDestructiveSql,
     parseAssistantMessage,
@@ -38,13 +43,14 @@
     deleteConversation,
   } from '$lib/stores/conversations.js'
   import { generateSuggestions } from '$lib/ai-suggestions.js'
+  import { formatCompactCount } from '$lib/table-list.js'
 
   /**
    * @typedef {
    *   | { id: string, kind: 'user', text: string }
    *   | { id: string, kind: 'assistant', parts: import('$lib/ai.js').AssistantPart[] }
    *   | { id: string, kind: 'streaming' }
-   *   | { id: string, kind: 'result', sql: string, columns: {name:string,dataType?:string}[], rows: unknown[][], total: number, error: string|null, isSchema?: boolean }
+   *   | { id: string, kind: 'result', sql: string, columns: {name:string,dataType?:string}[], rows: unknown[][], total: number, error: string|null, isSchema?: boolean, capped?: boolean }
    *   | { id: string, kind: 'confirm', sql: string, resolve: (ok: boolean) => void }
    *   | { id: string, kind: 'thinking' }
    *   | { id: string, kind: 'executing', sql: string }
@@ -183,6 +189,8 @@
   let apiHistory = $state([])
   let loading = $state(false)
   let error = $state('')
+  /** Shown on the thinking row while waiting on rate-limit retries */
+  let aiStatusHint = $state('')
   let inputText = $state('')
   /** Tracks all (name:args) combos executed this turn — prevents exact duplicate calls */
   let executedCalls = new Set()
@@ -348,6 +356,65 @@
   /** @type {HTMLTextAreaElement | null} */
   let inputRef = $state(null)
 
+  // ── Input undo / redo ─────────────────────────────────────────────────────
+  /** @type {string[]} */
+  let inputHistory = ['']
+  let inputHistoryIdx = 0
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let historyTimer = null
+
+  function pushHistory(text) {
+    if (historyTimer) clearTimeout(historyTimer)
+    historyTimer = setTimeout(() => {
+      historyTimer = null
+      if (text === inputHistory[inputHistoryIdx]) return
+      inputHistory = [...inputHistory.slice(0, inputHistoryIdx + 1), text]
+      inputHistoryIdx = inputHistory.length - 1
+    }, 250)
+  }
+
+  function undoInput() {
+    if (historyTimer) { clearTimeout(historyTimer); historyTimer = null }
+    if (inputText !== inputHistory[inputHistoryIdx]) {
+      inputHistory = [...inputHistory.slice(0, inputHistoryIdx + 1), inputText]
+      inputHistoryIdx = inputHistory.length - 1
+    }
+    if (inputHistoryIdx <= 0) return
+    inputHistoryIdx--
+    inputText = inputHistory[inputHistoryIdx]
+    void tick().then(() => { resizeInput(); inputRef?.focus() })
+  }
+
+  function redoInput() {
+    if (inputHistoryIdx >= inputHistory.length - 1) return
+    inputHistoryIdx++
+    inputText = inputHistory[inputHistoryIdx]
+    void tick().then(() => { resizeInput(); inputRef?.focus() })
+  }
+
+  function resetHistory() {
+    if (historyTimer) { clearTimeout(historyTimer); historyTimer = null }
+    inputHistory = ['']
+    inputHistoryIdx = 0
+  }
+
+  const canUndo = $derived(inputHistoryIdx > 0 || inputText !== inputHistory[inputHistoryIdx])
+  const canRedo = $derived(inputHistoryIdx < inputHistory.length - 1)
+
+  // ── `/` global focus shortcut ─────────────────────────────────────────────
+  onMount(() => {
+    function onSlash(/** @type {KeyboardEvent} */ e) {
+      if (!isActive || e.key !== '/') return
+      const tag = /** @type {HTMLElement | null} */ (document.activeElement)?.tagName ?? ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (/** @type {HTMLElement | null} */ (document.activeElement)?.isContentEditable) return
+      e.preventDefault()
+      inputRef?.focus()
+    }
+    document.addEventListener('keydown', onSlash)
+    onDestroy(() => document.removeEventListener('keydown', onSlash))
+  })
+
   let seq = 0
   const uid = () => `c${++seq}`
 
@@ -407,21 +474,6 @@
     collapsed = next
   }
 
-  // ── Markdown rendering (cached) ────────────────────────────────────────────
-  /** @type {Map<string, string>} */
-  const mdCache = new Map()
-
-  /** @param {string} md */
-  function renderMd(md) {
-    let html = mdCache.get(md)
-    if (!html) {
-      html = /** @type {string} */ (marked.parse(md, { breaks: true, gfm: true }))
-      if (mdCache.size > 200) mdCache.clear()
-      mdCache.set(md, html)
-    }
-    return html
-  }
-
   // ── Input auto-resize ──────────────────────────────────────────────────────
   function resizeInput() {
     const el = inputRef
@@ -446,6 +498,21 @@
       void send()
       return
     }
+    // Ctrl/Cmd + Z → undo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault()
+      undoInput()
+      return
+    }
+    // Ctrl/Cmd + Shift + Z  or  Ctrl + Y → redo
+    if (
+      ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) ||
+      (e.ctrlKey && e.key === 'y')
+    ) {
+      e.preventDefault()
+      redoInput()
+      return
+    }
     // Ctrl/Cmd + Backspace → clear the entire input
     if (e.key === 'Backspace' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
@@ -458,7 +525,8 @@
     const text = (overrideText ?? inputText).trim()
     if (!text || loading || hasPendingConfirm) return
     error = ''
-    if (!overrideText) { inputText = ''; resetInputHeight() }
+    aiStatusHint = ''
+    if (!overrideText) { inputText = ''; resetInputHeight(); resetHistory() }
 
     items = [...items, { id: uid(), kind: 'user', text }]
     apiHistory = [...apiHistory, { role: 'user', content: text }]
@@ -501,9 +569,36 @@
     }
   }
 
+  /** Max rows fetched from DB per AI tool call — prevents OOM on large tables */
+  const AI_ROW_LIMIT = 500
+  /** Max rows kept in chat state for display */
+  const AI_DISPLAY_ROWS = 200
+
+  /**
+   * Append LIMIT to SELECT/CTE queries that lack one.
+   * DML/DDL pass through unchanged.
+   * @param {string} sql
+   * @returns {{ sql: string, capped: boolean }}
+   */
+  function guardSelectLimit(sql) {
+    // Strip trailing semicolons first — appending "\nLIMIT N" after a ";" produces
+    // a bare LIMIT statement that PostgreSQL rejects with a syntax error.
+    const cleaned = sql.trimEnd().replace(/;+$/, '')
+    const t = cleaned.trimStart()
+    if (!/^(with\b|select\b)/i.test(t)) return { sql: cleaned, capped: false }
+    if (/\blimit\s+\d/i.test(t)) return { sql: cleaned, capped: false }
+    return { sql: `${cleaned}\nLIMIT ${AI_ROW_LIMIT}`, capped: true }
+  }
+
   /** @param {number} depth */
   async function runAiTurn(depth) {
     if (depth > 40) throw new Error('Too many AI iterations — aborting runaway execution')
+
+    // Space out follow-up turns after tool calls to avoid burst rate limits
+    if (depth > 0) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (abortController?.signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
+    }
 
     let fullContent = ''
     /** @type {import('$lib/ai.js').ToolCall[]} */
@@ -516,8 +611,13 @@
       [{ role: 'system', content: systemPrompt }, ...apiHistory],
       AI_TOOLS,
       abortController?.signal,
+      ({ attempt, waitMs }) => {
+        const sec = Math.ceil(waitMs / 1000)
+        aiStatusHint = `Rate limited — retrying in ${sec}s (attempt ${attempt}/${MAX_AI_RETRIES})…`
+      },
     )) {
       if (chunk.textDelta) {
+        aiStatusHint = ''
         fullContent += chunk.textDelta
         if (!itemId) {
           itemId = uid()
@@ -603,23 +703,38 @@
             return
           }
         }
+        const { sql: guardedSql, capped: frontendCapped } = guardSelectLimit(sql)
         const execId = uid()
         items = [...items, { id: execId, kind: 'executing', sql }]
         await scrollBottom()
-        const data = await executeSql(sql)
+        const data = await executeSql(guardedSql)
         const cols = data.columns ?? []
         const rows = data.rows ?? []
         const total = data.rowCount ?? rows.length
+        // Backend signals a cap via its message field
+        const backendCapped = typeof data.message === 'string' && data.message.startsWith('Showing first')
+        const anyCapped = frontendCapped || backendCapped
+        const displayRows = rows.slice(0, AI_DISPLAY_ROWS)
         const resultId = uid()
         items = items
           .filter((i) => i.id !== execId)
-          .concat([{ id: resultId, kind: 'result', sql, columns: cols, rows, total, error: null }])
+          .concat([{
+            id: resultId,
+            kind: 'result',
+            sql,
+            columns: cols,
+            rows: displayRows,
+            total,
+            error: null,
+            capped: anyCapped,
+          }])
         autoOpenResult(resultId)
         await scrollBottom()
         toolResult = JSON.stringify({
           columns: cols.map((c) => c.name),
           rows: rows.slice(0, 30),
           total_rows: total,
+          ...(anyCapped ? { notice: data.message ?? `Results capped. Use WHERE or LIMIT to fetch a specific range.` } : {}),
           message: data.message ?? null,
         })
       } else if (call.function.name === 'describe_table') {
@@ -731,13 +846,6 @@
   /** @param {string} text */
   async function copyText(text) {
     await navigator.clipboard.writeText(text).catch(() => {})
-  }
-
-  /** @param {unknown} cell */
-  function cellStr(cell) {
-    if (cell === null || cell === undefined) return 'NULL'
-    if (typeof cell === 'object') return JSON.stringify(cell)
-    return String(cell)
   }
 
   function relativeTime(/** @type {number} */ ts) {
@@ -954,7 +1062,7 @@
               {/if}
             </div>
           {:else}
-            <div class="flex flex-col gap-3">
+            <div class="flex flex-col gap-3" data-studio-selectable="text">
               {#each items as item (item.id)}
 
                 {#if item.kind === 'user'}
@@ -967,26 +1075,25 @@
                 {:else if item.kind === 'thinking'}
                   <div class="flex items-center gap-2 text-xs text-muted-foreground">
                     <Bot class="size-3.5 shrink-0 text-primary/60" />
-                    <span class="inline-flex gap-0.5">
-                      <span class="animate-bounce" style="animation-delay:0ms">·</span>
-                      <span class="animate-bounce" style="animation-delay:150ms">·</span>
-                      <span class="animate-bounce" style="animation-delay:300ms">·</span>
-                    </span>
+                    {#if aiStatusHint}
+                      <span>{aiStatusHint}</span>
+                    {:else}
+                      <span class="inline-flex gap-0.5">
+                        <span class="animate-bounce" style="animation-delay:0ms">·</span>
+                        <span class="animate-bounce" style="animation-delay:150ms">·</span>
+                        <span class="animate-bounce" style="animation-delay:300ms">·</span>
+                      </span>
+                    {/if}
                   </div>
 
                 {:else if item.kind === 'streaming'}
-                  <div class="flex flex-col gap-2">
-                    <div class="prose-ai">
-                      {@html renderMd(streamingContent)}
-                      <span class="ml-px inline-block h-[0.85em] w-px translate-y-px animate-pulse bg-foreground/70 align-middle"></span>
-                    </div>
-                  </div>
+                  <AiMarkdown content={streamingContent} debounceMs={180} streaming />
 
                 {:else if item.kind === 'assistant'}
                   <div class="flex flex-col gap-2">
                     {#each item.parts as part, pi}
                       {#if part.type === 'text'}
-                        <div class="prose-ai">{@html renderMd(part.content)}</div>
+                        <AiMarkdown content={part.content} />
                       {:else if part.type === 'mermaid'}
                         <div class="mermaid-output overflow-hidden rounded-lg border border-border">
                           <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/30 px-3 py-1.5">
@@ -1031,9 +1138,7 @@
                               </button>
                             </div>
                           </div>
-                          {#if sqlOpen}
-                            <pre class="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground">{part.content}</pre>
-                          {/if}
+                          <AiSqlBlock sql={part.content} open={sqlOpen} />
                         </div>
                       {/if}
                     {/each}
@@ -1073,7 +1178,10 @@
                       <Table2 class={cn('size-3 shrink-0', item.isSchema ? 'text-primary/70' : 'text-muted-foreground')} />
                       <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{item.sql || 'Query'}</span>
                       {#if !item.error}
-                        <span class="shrink-0 tabular-nums text-muted-foreground">{item.total.toLocaleString()} {item.total === 1 ? 'row' : 'rows'}</span>
+                        <span
+                          class="shrink-0 tabular-nums text-muted-foreground"
+                          title={item.total.toLocaleString('en-US')}
+                        >{formatCompactCount(item.total)} {item.total === 1 ? 'row' : 'rows'}</span>
                       {/if}
                     </button>
                     {#if resOpen}
@@ -1082,31 +1190,20 @@
                       {:else if item.rows.length === 0}
                         <p class="px-3 py-2 italic text-muted-foreground">No rows returned.</p>
                       {:else}
-                        <div class="overflow-x-auto">
-                          <table class="w-full border-collapse font-mono">
-                            <thead>
-                              <tr class="border-b border-border/50 bg-muted/20">
-                                {#each item.columns as col (col.name)}
-                                  <th class="px-3 py-1.5 text-left font-medium text-muted-foreground">{col.name}</th>
-                                {/each}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {#each item.rows.slice(0, 10) as row, ri}
-                                <tr class={cn('border-b border-border/20', ri % 2 !== 0 && 'bg-muted/10')}>
-                                  {#each /** @type {unknown[]} */ (row) as cell}
-                                    <td class={cn('max-w-[16rem] truncate px-3 py-1', (cell === null || cell === undefined) && 'italic text-muted-foreground/50')}>
-                                      {cellStr(cell)}
-                                    </td>
-                                  {/each}
-                                </tr>
-                              {/each}
-                            </tbody>
-                          </table>
-                        </div>
-                        {#if item.rows.length > 10}
+                        <DataTable
+                          columns={item.columns}
+                          rows={item.rows.slice(0, 10)}
+                          embedded
+                          showSelection={false}
+                        />
+                        {#if item.capped}
+                          <p class="flex items-center gap-1.5 border-t border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-amber-600 dark:text-amber-400">
+                            <AlertTriangle class="size-3 shrink-0" />
+                            Results capped at {AI_ROW_LIMIT.toLocaleString()} rows to protect performance. Add an explicit LIMIT or WHERE clause.
+                          </p>
+                        {:else if item.rows.length > 10}
                           <p class="border-t border-border/20 px-3 py-1.5 text-muted-foreground">
-                            Showing 10 of {item.total.toLocaleString()} rows
+                            Showing 10 of {formatCompactCount(item.total)} rows
                           </p>
                         {/if}
                       {/if}
@@ -1143,45 +1240,70 @@
         <!-- Input -->
         <div class="shrink-0 border-t border-border bg-background px-3 pb-3 pt-2.5">
           <div class={cn(
-            'flex items-end gap-0 rounded-xl border bg-background transition-colors',
+            'flex flex-col rounded-xl border bg-background transition-colors',
             hasPendingConfirm
               ? 'border-border opacity-60'
               : 'border-border focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20',
           )}>
             <textarea
               bind:this={inputRef}
-              class="min-h-[2.75rem] flex-1 resize-none bg-transparent px-3.5 py-2.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+              class="min-h-[2.75rem] flex-1 resize-none bg-transparent px-3.5 pt-2.5 pb-1.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
               style="height:auto;overflow-y:hidden"
               placeholder={hasPendingConfirm ? 'Confirm or cancel the operation above…' : 'Ask anything about your database…'}
               rows={1}
               value={inputText}
-              oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput() }}
+              oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput(); pushHistory(inputText) }}
               onkeydown={handleKeydown}
               disabled={hasPendingConfirm}
             ></textarea>
-            {#if loading}
-              <button
-                type="button"
-                class="mb-1.5 mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground transition-opacity hover:opacity-80"
-                onclick={stop}
-                aria-label="Stop generating"
-                title="Stop generating"
-              >
-                <Square class="size-3 fill-current" />
-              </button>
-            {:else}
-              <button
-                type="button"
-                class="mb-1.5 mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
-                disabled={hasPendingConfirm || !inputText.trim()}
-                onclick={() => void send()}
-                aria-label="Send"
-              >
-                <Send class="size-3.5" />
-              </button>
-            {/if}
+            <!-- toolbar row -->
+            <div class="flex items-center justify-between px-2 pb-1.5">
+              <div class="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  disabled={!canUndo || hasPendingConfirm}
+                  onclick={undoInput}
+                  title="Undo ({modKey}+Z)"
+                  class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <Undo2 class="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRedo || hasPendingConfirm}
+                  onclick={redoInput}
+                  title="Redo ({modKey}+Shift+Z)"
+                  class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                >
+                  <Redo2 class="size-3.5" />
+                </button>
+              </div>
+              {#if loading}
+                <button
+                  type="button"
+                  class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground transition-opacity hover:opacity-80"
+                  onclick={stop}
+                  aria-label="Stop generating"
+                  title="Stop generating"
+                >
+                  <Square class="size-3 fill-current" />
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
+                  disabled={hasPendingConfirm || !inputText.trim()}
+                  onclick={() => void send()}
+                  aria-label="Send"
+                >
+                  <Send class="size-3.5" />
+                </button>
+              {/if}
+            </div>
           </div>
-          <p class="mt-1.5 text-[11px] text-muted-foreground/50">Enter to send · Shift+Enter new line · {modKey}+K command menu</p>
+          <p class="mt-1.5 text-[11px] text-muted-foreground/50">
+            Enter to send · Shift+Enter new line · {modKey}+Z undo · / focus
+          </p>
         </div>
 
       </div>
@@ -1254,7 +1376,7 @@
     border-radius: 3px;
     padding: 0.1em 0.3em;
   }
-  :global(.prose-ai pre) {
+  :global(.prose-ai pre:not(.shiki)) {
     background: var(--muted);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -1262,11 +1384,26 @@
     overflow-x: auto;
     margin: 0.5rem 0;
   }
-  :global(.prose-ai pre code) {
+  :global(.prose-ai pre:not(.shiki) code) {
     background: none;
     border: none;
     padding: 0;
     font-size: 0.8rem;
+  }
+  :global(.prose-ai pre.shiki) {
+    margin: 0.5rem 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow-x: auto;
+    background: color-mix(in oklch, var(--muted) 55%, transparent) !important;
+  }
+  :global(.prose-ai pre.shiki code) {
+    font-family: ui-monospace, 'Geist Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.55;
+  }
+  :global(.prose-ai-loading pre.shiki) {
+    opacity: 0.7;
   }
   :global(.prose-ai table) {
     border-collapse: collapse;

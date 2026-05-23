@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte'
   import { highlightCode } from '$lib/shiki-highlighter.js'
+  import { cn } from '$lib/utils.js'
   import { mode } from 'mode-watcher'
   import {
     getJsonValueRangeAtOffset,
@@ -14,6 +15,9 @@
     lang = 'plaintext',
     /** Enable JSON value select-on-dblclick and clickable URLs */
     jsonInteractive = false,
+    /** Compact embed (AI chat SQL blocks) — no full-height panel chrome */
+    embedded = false,
+    class: className = '',
   } = $props()
 
   let html = $state('')
@@ -99,14 +103,25 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={rootEl}
-  class="app-scroll relative min-h-0 flex-1 overflow-auto bg-panel"
+  data-studio-selectable="text"
+  class={cn(
+    embedded
+      ? 'shiki-block-embedded relative overflow-x-auto bg-transparent'
+      : 'app-scroll relative min-h-0 flex-1 overflow-auto bg-panel',
+    className,
+  )}
   ondblclick={handleDblClick}
 >
   {#if loading && !html}
     <p class="px-3 py-4 font-mono text-ui-sm text-muted-foreground">Highlighting…</p>
   {:else}
     <div
-      class="shiki-block contents [&_pre]:m-0 [&_pre]:bg-transparent! [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-ui-sm [&_pre]:leading-relaxed [&_pre]:whitespace-pre-wrap [&_pre]:break-all [&_.json-inspector-url]:cursor-pointer [&_.json-inspector-url]:text-link [&_.json-inspector-url]:underline [&_.json-inspector-url]:underline-offset-2 [&_.json-inspector-url]:decoration-link/45 hover:[&_.json-inspector-url]:text-link-hover hover:[&_.json-inspector-url]:decoration-link"
+      class={cn(
+        'shiki-block contents [&_pre]:m-0 [&_pre]:bg-transparent! [&_pre]:font-mono [&_pre]:leading-relaxed [&_.json-inspector-url]:cursor-pointer [&_.json-inspector-url]:text-link [&_.json-inspector-url]:underline [&_.json-inspector-url]:underline-offset-2 [&_.json-inspector-url]:decoration-link/45 hover:[&_.json-inspector-url]:text-link-hover hover:[&_.json-inspector-url]:decoration-link',
+        embedded
+          ? '[&_pre]:p-3 [&_pre]:text-ui-xs [&_pre]:whitespace-pre'
+          : '[&_pre]:p-3 [&_pre]:text-ui-sm [&_pre]:whitespace-pre-wrap [&_pre]:break-all',
+      )}
     >
       {@html html}
     </div>

@@ -9,34 +9,38 @@
   --radius: 0.375rem;
   --app-zoom: 1;
   --app-font-size: 13px;
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.96 0 0);
-  --secondary-foreground: oklch(0.25 0 0);
-  --muted: oklch(0.96 0 0);
-  --muted-foreground: oklch(0.5 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.2 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.9 0 0);
-  --input: oklch(0.92 0 0);
-  --ring: oklch(0.65 0 0);
-  --sidebar: oklch(0.98 0 0);
-  --sidebar-foreground: oklch(0.2 0 0);
-  --sidebar-accent: oklch(0.94 0 0);
-  --sidebar-accent-foreground: oklch(0.15 0 0);
-  --sidebar-border: oklch(0.9 0 0);
-  --panel: oklch(0.99 0 0);
-  --link: oklch(0.42 0.14 250);
-  --link-hover: oklch(0.32 0.16 250);
+  /* Warm paper palette — aligned with Shiki vitesse-light / solarized cream (not pure white) */
+  --background: oklch(0.972 0.016 98);
+  --foreground: oklch(0.3 0.02 115);
+  --card: oklch(0.988 0.012 98);
+  --card-foreground: oklch(0.3 0.02 115);
+  --popover: oklch(0.988 0.012 98);
+  --popover-foreground: oklch(0.3 0.02 115);
+  --primary: oklch(0.28 0.03 145);
+  --primary-foreground: oklch(0.985 0.01 98);
+  --secondary: oklch(0.94 0.018 95);
+  --secondary-foreground: oklch(0.32 0.02 115);
+  --muted: oklch(0.94 0.018 95);
+  --muted-foreground: oklch(0.52 0.025 100);
+  --accent: oklch(0.91 0.02 95);
+  --accent-foreground: oklch(0.28 0.02 115);
+  --destructive: oklch(0.55 0.2 25);
+  --border: oklch(0.87 0.022 92);
+  --input: oklch(0.87 0.022 92);
+  --ring: oklch(0.62 0.04 145);
+  --sidebar: oklch(0.965 0.017 98);
+  --sidebar-foreground: oklch(0.32 0.02 115);
+  --sidebar-accent: oklch(0.91 0.02 95);
+  --sidebar-accent-foreground: oklch(0.26 0.02 115);
+  --sidebar-border: oklch(0.87 0.022 92);
+  --panel: oklch(0.962 0.017 98);
+  --table-grid: oklch(0.84 0.024 90);
+  --link: oklch(0.45 0.12 250);
+  --link-hover: oklch(0.36 0.14 250);
   --editor-font-size: 16px;
   --editor-line-height: 26px;
+  --editor-surface: oklch(0.988 0.012 98);
+  --editor-line-highlight: oklch(0.955 0.018 98);
 }
 
 .dark {
@@ -65,6 +69,7 @@
   --sidebar-accent-foreground: oklch(0.98 0 0);
   --sidebar-border: oklch(1 0 0 / 6%);
   --panel: oklch(0.12 0 0);
+  --table-grid: oklch(1 0 0 / 18%);
   --link: oklch(0.74 0.12 250);
   --link-hover: oklch(0.82 0.1 250);
   --editor-surface: oklch(0.15 0 0);
@@ -99,6 +104,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-panel: var(--panel);
+  --color-table-grid: var(--table-grid);
   --color-link: var(--link);
   --color-link-hover: var(--link-hover);
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
@@ -128,6 +134,64 @@
 
   #app {
     @apply m-0 h-full min-h-0 overflow-hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /*
+   * Text selection only where users copy data (cells, editors, inspector, dialogs).
+   * Everything else inherits select-none from #app.
+   */
+  #app :is(
+    input,
+    textarea,
+    select,
+    [contenteditable='true'],
+    [data-studio-selectable='text'],
+    [data-studio-selectable='text'] *
+  ) {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #app :is(.sql-editor-host, .sql-editor-host *, .monaco-editor, .monaco-editor *) {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #app :is(.studio-data-table tbody td, .studio-data-table tbody td *) {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #app [data-slot='dialog-content'],
+  #app [data-slot='dialog-content'] * {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #app [data-sonner-toast],
+  #app [data-sonner-toast] * {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Resize/drag surfaces — never highlight text */
+  #app :is(
+    .cursor-col-resize,
+    .cursor-row-resize,
+    .cursor-col-resize *,
+    .cursor-row-resize *,
+    [data-slot='scroll-area-scrollbar'],
+    [data-slot='scroll-area-thumb']
+  ) {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
+  /* App chrome: no focus ring for mouse clicks; keep keyboard focus-visible */
+  [data-studio-chrome] :focus:not(:focus-visible) {
+    outline: none;
   }
 
   /* Portaled overlays use rem (html font-size); keep explicit size for non-rem children */
@@ -137,11 +201,12 @@
     font-size: var(--app-font-size);
   }
 
-  /* Toasts: Geist + app scale (Sonner defaults to system UI stack) */
+  /* Sonner — macOS-style stack (shadcn toaster group + frosted cards) */
+  .toaster,
   [data-sonner-toaster] {
     font-family: var(--font-sans);
     font-size: var(--app-font-size);
-    --border-radius: var(--radius);
+    --border-radius: 0.75rem;
   }
 
   [data-sonner-toaster] [data-sonner-toast] {
@@ -157,6 +222,21 @@
     display: none;
   }
 
+  [data-sonner-toaster] [data-sonner-toast][data-styled='false'] [data-content]:has([data-title]:empty):not(
+      :has([data-description]:not(:empty))
+    ) {
+    display: none;
+  }
+
+  /* Tighter macOS-like stack spacing */
+  [data-sonner-toaster][data-expanded='false'] [data-sonner-toast][data-front='false'] {
+    opacity: 0.92;
+  }
+
+  [data-sonner-toaster] [data-sonner-toast][data-expanded='true'] {
+    --scale: 1 !important;
+  }
+
   .font-mono,
   [data-font="mono"] {
     font-family: var(--font-mono);
@@ -167,23 +247,61 @@
     background-color: transparent !important;
   }
 
-  /* Table / autodetected mailto links — primary is too dark on dark backgrounds */
-  [data-studio-region='main'] table td a,
-  [data-studio-region='main'] table td a:visited,
-  a[x-apple-data-detectors] {
-    color: var(--link);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    text-decoration-color: color-mix(in oklch, var(--link) 45%, transparent);
+  /* WebKit may still autolink emails/phones — keep them looking like normal cells */
+  [data-studio-region='main'] table td a[x-apple-data-detectors] {
+    color: inherit;
+    text-decoration: none;
+    pointer-events: none;
   }
 
-  [data-studio-region='main'] table td a:hover {
-    color: var(--link-hover);
-    text-decoration-color: var(--link);
+  /* Explicit http(s) links in table cells only */
+  [data-studio-region='main'] table td a[data-cell-url] {
+    color: inherit;
+    text-decoration: none;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  [data-studio-region='main'] table td a[data-cell-url]:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(in oklch, currentColor 40%, transparent);
+  }
+
+  /* Data grid — always-visible column/row lines (stronger than --border on dark UI) */
+  .studio-table-toolbar {
+    border-bottom: 1px solid var(--table-grid);
+  }
+
+  .studio-data-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    user-select: none;
+  }
+
+  /* Re-enable selection inside active edit inputs / selects / buttons */
+  .studio-data-table input,
+  .studio-data-table select,
+  .studio-data-table textarea {
+    user-select: text;
+  }
+
+  .studio-data-table :is(thead th, tbody td) {
+    border-right: 1px solid var(--table-grid);
+    border-bottom: 1px solid var(--table-grid);
+  }
+
+  .studio-data-table thead {
+    box-shadow: 0 1px 0 0 var(--table-grid);
   }
 }
 
 @layer utilities {
+  .studio-chrome {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
   /* UI type scale (1rem = --app-font-size). Replaces text-[Npx] so zoom stays crisp. */
   .text-ui {
     font-size: 1rem;
@@ -205,9 +323,28 @@
     font-size: calc(9 / 13 * 1rem);
   }
 
+  /* Skeleton placeholders (shadcn-style pulse) */
+  .skeleton {
+    background-color: color-mix(in oklch, var(--muted-foreground) 14%, var(--muted));
+    animation: skeleton-pulse 1.6s ease-in-out infinite;
+  }
+
+  @keyframes skeleton-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* Optional sweeping highlight (sidebar list, etc.) */
   .shimmer {
     position: relative;
     overflow: hidden;
+    background-color: color-mix(in oklch, var(--muted-foreground) 14%, var(--muted));
+    animation: skeleton-pulse 1.6s ease-in-out infinite;
   }
 
   .shimmer::after {
@@ -218,10 +355,10 @@
     background: linear-gradient(
       90deg,
       transparent 0%,
-      color-mix(in oklch, var(--foreground) 7%, transparent) 50%,
+      color-mix(in oklch, var(--foreground) 5%, transparent) 50%,
       transparent 100%
     );
-    animation: shimmer-sweep 1.35s ease-in-out infinite;
+    animation: shimmer-sweep 2s ease-in-out infinite;
   }
 
   @keyframes shimmer-sweep {

@@ -18,6 +18,7 @@
     loadLayout,
     saveLayout,
   } from '$lib/stores/layout.js'
+  import { formatCompactCount } from '$lib/table-list.js'
 
   /**
    * @typedef {{ kind: 'cell', rowIdx: number, colIdx: number } | { kind: 'row', rowIdx: number } | { kind: 'rows', rowIndices: number[] }} InspectorTarget
@@ -67,7 +68,7 @@
     const records = target.rowIndices.map((idx) => rowToRecord(columns, rows[idx] ?? []))
     return {
       title: 'Selection',
-      subtitle: `${target.rowIndices.length} rows`,
+      subtitle: `${formatCompactCount(target.rowIndices.length)} rows`,
       badge: null,
       normalText: formatNormalRecords(records),
       jsonText: formatJsonValue(payload),
@@ -113,7 +114,10 @@
     <aside
       class="flex h-full min-w-0 flex-1 flex-col border-l border-border bg-sidebar text-sidebar-foreground"
     >
-      <header class="flex shrink-0 items-start gap-2 border-b border-sidebar-border px-3 py-2.5">
+      <header
+        class="studio-chrome flex shrink-0 items-start gap-2 border-b border-sidebar-border px-3 py-2.5"
+        data-studio-chrome
+      >
         <div class="min-w-0 flex-1">
           <p class="truncate font-mono text-ui-sm font-medium text-foreground">{meta.title}</p>
           <p class="truncate font-mono text-ui-2xs text-muted-foreground">{meta.subtitle}</p>
@@ -140,7 +144,7 @@
       </header>
 
       <Tabs.Root bind:value={viewMode} class="flex min-h-0 flex-1 flex-col">
-        <Tabs.List class="mx-2 mt-2 h-8 w-auto shrink-0">
+        <Tabs.List class="studio-chrome mx-2 mt-2 h-8 w-auto shrink-0" data-studio-chrome>
           <Tabs.Trigger value="normal" class="px-3 text-ui-xs">Normal</Tabs.Trigger>
           <Tabs.Trigger value="json" class="px-3 text-ui-xs">JSON</Tabs.Trigger>
         </Tabs.List>

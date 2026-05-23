@@ -84,7 +84,7 @@ pub async fn query(config: &D1Config, sql: &str, params: Vec<Value>) -> Result<S
         .first()
         .map(|row| {
             row.keys()
-                .map(|k| ColumnInfo { name: k.clone(), data_type: "text".to_string() })
+                .map(|k| ColumnInfo::new(k.clone(), "text"))
                 .collect()
         })
         .unwrap_or_default();
