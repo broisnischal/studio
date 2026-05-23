@@ -92,6 +92,12 @@ jobs:
             - Apple Silicon (`.dmg` / `.app`): `aarch64-apple-darwin` asset
             - Intel Mac (`.dmg` / `.app`): `x86_64-apple-darwin` asset
 
+            > **"damaged and can't be opened"?** macOS Gatekeeper blocks apps not signed with a paid Apple certificate. Run this once after downloading:
+            > ```bash
+            > xattr -cr /Applications/db-studio.app
+            > ```
+            > Or: right-click the `.dmg` → Open → Open Anyway in System Settings → Privacy & Security.
+
             ### Linux
             - `.deb` / `.AppImage` / `.rpm` (check assets below)
 
