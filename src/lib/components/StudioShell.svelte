@@ -287,6 +287,13 @@
     if (commandOpen && persistConnectionId) void refreshQueryStores()
   })
 
+  $effect(() => {
+    if (!commandOpen) return
+    showConnectionModal = false
+    showSettingsModal = false
+    showShortcutsModal = false
+  })
+
   const aiSchemaContext = $derived.by(() => ({
     schemas: [...schemas],
     activeSchema,
