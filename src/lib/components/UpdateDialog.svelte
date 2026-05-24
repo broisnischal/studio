@@ -8,6 +8,7 @@
   import X from '@lucide/svelte/icons/x'
   import CheckCircle2 from '@lucide/svelte/icons/check-circle-2'
   import AlertCircle from '@lucide/svelte/icons/alert-circle'
+  import Loader2 from '@lucide/svelte/icons/loader-2'
 
   /** @type {'idle'|'available'|'downloading'|'done'|'error'|'up-to-date'} */
   let status = $state('idle')
@@ -21,9 +22,20 @@
   let pendingUpdate = $state(null)
 
   let dismissed = $state(false)
+  let checking = $state(false)
+
+  /** Call this to manually trigger an update check (e.g. from the command palette). */
+  export async function checkNow() {
+    if (checking || status === 'downloading') return
+    dismissed = false
+    checking = true
+    await checkForUpdate()
+    if (status === 'idle') status = 'up-to-date'
+    checking = false
+  }
 
   const visible = $derived(
-    !dismissed && (status === 'available' || status === 'downloading' || status === 'done' || status === 'error'),
+    !dismissed && (status === 'available' || status === 'downloading' || status === 'done' || status === 'error' || status === 'up-to-date' || checking),
   )
 
   function fmt(bytes) {
@@ -89,15 +101,17 @@
   >
     <!-- header -->
     <div class="flex items-center gap-2.5 border-b border-border px-4 py-3">
-      {#if status === 'done'}
+      {#if status === 'done' || status === 'up-to-date'}
         <CheckCircle2 class="size-4 shrink-0 text-green-500" />
       {:else if status === 'error'}
         <AlertCircle class="size-4 shrink-0 text-destructive" />
+      {:else if checking}
+        <Loader2 class="size-4 shrink-0 animate-spin text-primary/70" />
       {:else}
         <Download class="size-4 shrink-0 text-primary/70" />
       {/if}
       <span class="flex-1 text-ui-sm font-medium text-foreground">
-        {#if status === 'available'}Update available{:else if status === 'downloading'}Downloading update…{:else if status === 'done'}Ready to install{:else if status === 'error'}Update failed{/if}
+        {#if checking}Checking for updates…{:else if status === 'available'}Update available{:else if status === 'downloading'}Downloading update…{:else if status === 'done'}Ready to install{:else if status === 'error'}Update failed{:else if status === 'up-to-date'}Up to date{/if}
       </span>
       {#if status !== 'downloading'}
         <button
@@ -167,6 +181,11 @@
 
       {:else if status === 'error'}
         <p class="font-mono text-ui-xs text-destructive">{errorMsg}</p>
+
+      {:else if status === 'up-to-date' || checking}
+        <p class="text-muted-foreground">
+          {checking ? 'Checking GitHub for a newer release…' : 'You\'re on the latest version.'}
+        </p>
       {/if}
     </div>
   </div>

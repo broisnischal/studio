@@ -98,6 +98,8 @@
   let showShortcutsModal = $state(false)
   let showInsiderModal = $state(false)
   let commandOpen = $state(false)
+  /** @type {import('./UpdateDialog.svelte').default | null} */
+  let updateDialog = $state(null)
   let sidebarOpen = $state(loadLayout().navSidebarOpen)
 
   /** @type {StudioTab[]} */
@@ -1297,7 +1299,7 @@
 
 <InsiderDialog bind:open={showInsiderModal} />
 
-<UpdateDialog />
+<UpdateDialog bind:this={updateDialog} />
 
 <CommandPalette
   bind:open={commandOpen}
@@ -1317,6 +1319,7 @@
   onrefresh={handleRefresh}
   onopenai={() => openAiTab()}
   onopenshortcuts={() => (showShortcutsModal = true)}
+  oncheckupdate={() => void updateDialog?.checkNow()}
   onswitchdatabase={handleSwitchDatabase}
 />
 
@@ -1411,6 +1414,7 @@
           loading={sqlLoading}
           error={sqlError}
           schemaHints={sqlSchemaHints}
+          schemaContext={aiSchemaContext}
           onrun={runSql}
           onmodk={() => {
             commandOpen = true

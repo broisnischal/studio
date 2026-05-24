@@ -11,6 +11,7 @@
   import Bot         from '@lucide/svelte/icons/bot'
   import Keyboard    from '@lucide/svelte/icons/keyboard'
   import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right'
+  import ArrowDownToLine from '@lucide/svelte/icons/arrow-down-to-line'
   import * as Command from '$lib/components/ui/command/index.js'
   import { formatTableRowCount } from '$lib/table-list.js'
 
@@ -34,6 +35,7 @@
     onrefresh = () => {},
     onopenai = () => {},
     onopenshortcuts = () => {},
+    oncheckupdate = () => {},
     /** @param {import('$lib/stores/connections.js').SavedConnection} conn */
     onswitchdatabase = (conn) => {},
   } = $props()
@@ -142,6 +144,10 @@
             <Keyboard class="size-4 opacity-60" />
             <span>Keyboard shortcuts</span>
             <Command.Shortcut>?</Command.Shortcut>
+          </Command.Item>
+          <Command.Item value="check for updates upgrade version" onSelect={() => run(oncheckupdate)}>
+            <ArrowDownToLine class="size-4 opacity-60" />
+            <span>Check for updates</span>
           </Command.Item>
           <Command.Item value="disconnect database" onSelect={() => run(ondisconnect)}>
             <Unplug class="size-4 opacity-60" />

@@ -76,6 +76,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Build and upload distribution bundles (dmg, deb, rpm, AppImage, msi, exe).
+      # We intentionally skip the built-in latest.json generation because tauri-action
+      # re-packages the .app.tar.gz AFTER Tauri signs it, so the signature becomes
+      # invalid. We handle latest.json ourselves in the publish-updater-json job below.
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@v0
         env:
@@ -110,3 +114,120 @@ jobs:
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           tauriScript: npx tauri
           args: ${{ matrix.args }}
+          includeUpdaterJson: false
+
+      # ── Collect the Tauri-signed updater bundles ──────────────────────────────
+      # We re-upload the Tauri-signed file under a predictable name and save the
+      # .sig content as a GitHub Actions artifact for the final job.
+
+      - name: Upload macOS aarch64 updater bundle + sig
+        if: matrix.name == 'macos-aarch64'
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/db-studio.app.tar.gz"
+          gh release upload "${{ env.RELEASE_TAG }}" "$BUNDLE#db-studio_aarch64.app.tar.gz" --clobber
+          cp "${BUNDLE}.sig" updater.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS x64 updater bundle + sig
+        if: matrix.name == 'macos-x64'
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/db-studio.app.tar.gz"
+          gh release upload "${{ env.RELEASE_TAG }}" "$BUNDLE#db-studio_x64.app.tar.gz" --clobber
+          cp "${BUNDLE}.sig" updater.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux updater bundle + sig
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          BUNDLE="src-tauri/target/release/bundle/appimage/db-studio_${VERSION}_amd64.AppImage.tar.gz"
+          gh release upload "${{ env.RELEASE_TAG }}" "$BUNDLE#db-studio_amd64.AppImage.tar.gz" --clobber
+          cp "${BUNDLE}.sig" updater.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows updater bundle + sig
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $bundle = "src-tauri/target/release/bundle/msi/db-studio_${version}_x64_en-US.msi.zip"
+          gh release upload "${{ env.RELEASE_TAG }}" "${bundle}#db-studio_x64_en-US.msi.zip" --clobber
+          Copy-Item "${bundle}.sig" updater.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save sig artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sig-${{ matrix.name }}
+          path: updater.sig
+          if-no-files-found: warn
+
+  # ── Generate latest.json from collected signatures ───────────────────────────
+  publish-updater-json:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all sig artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sig-*
+
+      - name: Generate and upload latest.json
+        run: |
+          export VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          export TAG="${{ env.RELEASE_TAG }}"
+          export BASE="https://github.com/broisnischal/studio/releases/download/${TAG}"
+
+          node - <<'JSEOF'
+          const fs = require('fs')
+          const version = process.env.VERSION
+          const base    = process.env.BASE
+
+          const read = (f) => {
+            try { return fs.readFileSync(f, 'utf8').trim() } catch { return '' }
+          }
+
+          const platforms = {}
+
+          const add = (key, sigPath, url) => {
+            const sig = read(sigPath)
+            if (sig) platforms[key] = { signature: sig, url }
+            else console.warn(`No sig at ${sigPath} — skipping ${key}`)
+          }
+
+          add('darwin-aarch64', 'sig-macos-aarch64/updater.sig', `${base}/db-studio_aarch64.app.tar.gz`)
+          add('darwin-x86_64',  'sig-macos-x64/updater.sig',     `${base}/db-studio_x64.app.tar.gz`)
+          add('linux-x86_64',   'sig-linux/updater.sig',         `${base}/db-studio_amd64.AppImage.tar.gz`)
+          add('windows-x86_64', 'sig-windows/updater.sig',       `${base}/db-studio_x64_en-US.msi.zip`)
+
+          const json = {
+            version,
+            notes: `See https://github.com/broisnischal/studio/releases/tag/v${version}`,
+            pub_date: new Date().toISOString(),
+            platforms,
+          }
+
+          fs.writeFileSync('latest.json', JSON.stringify(json, null, 2))
+          console.log('Generated latest.json:')
+          console.log(JSON.stringify(json, null, 2))
+
+          if (!Object.keys(platforms).length) {
+            console.error('ERROR: no platform signatures found')
+            process.exit(1)
+          }
+          JSEOF
+
+      - name: Upload latest.json to release
+        run: gh release upload "${{ env.RELEASE_TAG }}" latest.json --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
