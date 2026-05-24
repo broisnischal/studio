@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { toast } from 'svelte-sonner'
@@ -65,11 +65,13 @@
     connectPostgres,
     connectSqlite,
     connectD1,
+    listIndexes,
   } from '$lib/api.js'
   import {
     remapNullableRowIndex,
     remapRowIndexSet,
   } from '$lib/table-row-indices.js'
+  import { rowsToCsv, rowsToJson, saveExportFile, buildExportFilename } from '$lib/export.js'
 
   /** @typedef {import('$lib/studio-tabs.js').StudioTab} StudioTab */
   /** @typedef {import('$lib/studio-tabs.js').TableTabState} TableTabState */
@@ -79,6 +81,14 @@
   /** @typedef {import('$lib/foreign-key-nav.js').ForeignKeyInfo} ForeignKeyInfo */
 
   const SEARCH_DEBOUNCE_MS = 300
+  const COLUMNS_CACHE_MAX = 60
+
+  /** @param {Map<string, unknown>} map @param {string} key @param {unknown} value */
+  function lruSet(map, key, value) {
+    if (map.has(key)) map.delete(key)
+    map.set(key, value)
+    if (map.size > COLUMNS_CACHE_MAX) map.delete(/** @type {string} */ (map.keys().next().value))
+  }
 
   let connection = $state(null)
   let autoConnecting = $state(false)
@@ -97,11 +107,14 @@
   let schemas = $state([])
   let activeSchema = $state('public')
   let tables = $state([])
+  let indexes = $state([])
   let activeTable = $state(/** @type {string | null} */ (null))
   let tableFilter = $state('')
   let loadingTables = $state(false)
 
   let columns = $state([])
+  /** @type {Set<string>} */
+  let hiddenColumns = $state(new Set())
   /** @type {Map<string, typeof columns>} */
   let tableColumnsCache = $state(new Map())
   let primaryKey = $state([])
@@ -126,6 +139,12 @@
   let tableToolbar = $state(null)
   /** @type {ReturnType<typeof setTimeout> | null} */
   let filterDebounceTimer = null
+  onDestroy(() => {
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+  })
+
+
   /** Tracks which tab IDs currently have an in-flight background fetch. */
   const fetchingTabIds = new Set()
   let error = $state('')
@@ -245,6 +264,7 @@
       inspectorRow,
       editingCell: editingCell ? { ...editingCell } : null,
       savingCell: false,
+      hiddenColumns: new Set(hiddenColumns),
     }
   }
 
@@ -269,6 +289,7 @@
     editingCell = s.editingCell ? { ...s.editingCell } : null
     savingCell = false
     activeTable = s.table
+    hiddenColumns = new Set(s.hiddenColumns)
   }
 
   /** @returns {SqlTabState} */
@@ -720,6 +741,25 @@
     }
   }
 
+  async function loadIndexes() {
+    if (!activeSchema) { indexes = []; return }
+    try {
+      const list = await listIndexes(activeSchema)
+      indexes = list
+        .map((i) => ({
+          name: i.name ?? '',
+          tableName: i.tableName ?? i.table_name ?? '',
+          columns: i.columns ?? '',
+          indexType: i.indexType ?? i.index_type ?? 'btree',
+          isUnique: i.isUnique ?? i.is_unique ?? false,
+          isPrimary: i.isPrimary ?? i.is_primary ?? false,
+        }))
+        .filter((i) => i.name)
+    } catch {
+      indexes = []
+    }
+  }
+
   async function loadTables() {
     if (!activeSchema) {
       tables = []
@@ -733,6 +773,7 @@
         .map((t) => ({
           name: t.name ?? t.table_name ?? '',
           rowCount: normalizeTableRowCount(t.rowCount ?? t.row_count),
+          kind: t.kind ?? 'table',
         }))
         .filter((t) => t.name)
       if (activeTable && !tables.find((t) => t.name === activeTable)) {
@@ -744,6 +785,7 @@
     } finally {
       loadingTables = false
     }
+    void loadIndexes()
   }
 
   async function reloadTableFromQuery(resetPage = true) {
@@ -854,11 +896,9 @@
           : t,
       )
 
-      // Update AI schema cache
-      const cacheKey = `${s.schema}.${s.table}`
-      const nextCache = new Map(tableColumnsCache)
-      nextCache.set(cacheKey, result.columns)
-      tableColumnsCache = nextCache
+      // Update AI schema cache (LRU, capped)
+      lruSet(tableColumnsCache, `${s.schema}.${s.table}`, result.columns)
+      tableColumnsCache = tableColumnsCache
 
       // Sync to global state only if this tab is still active
       if (tabId === activeTabId) {
@@ -926,10 +966,8 @@
       })
       columns = data.columns ?? []
       if (activeTable) {
-        const cacheKey = `${activeSchema}.${activeTable}`
-        const next = new Map(tableColumnsCache)
-        next.set(cacheKey, columns)
-        tableColumnsCache = next
+        lruSet(tableColumnsCache, `${activeSchema}.${activeTable}`, columns)
+        tableColumnsCache = tableColumnsCache
       }
       primaryKey = data.primaryKey ?? data.primary_key ?? []
       foreignKeys = normalizeForeignKeys(data.foreignKeys ?? data.foreign_keys)
@@ -939,18 +977,6 @@
       const maxPage = Math.max(1, Math.ceil(total / pageSize) || 1)
       if (page > maxPage) {
         page = maxPage
-        saveActiveTabState()
-        if (total > 0 && activeTable) {
-          const offset = (page - 1) * pageSize
-          const { sortColumn, sortDirection } = sortForApi(rowSort)
-          const retry = await getTableRows(activeSchema, activeTable, pageSize, offset, {
-            search: rowSearch,
-            sortColumn,
-            sortDirection,
-            filters: filtersForApi(rowFilters),
-          })
-          rows = retry.rows ?? []
-        }
       }
     } catch (e) {
       error = String(e)
@@ -961,8 +987,17 @@
       total = 0
     } finally {
       loadingRows = false
-      saveActiveTabState()
     }
+  }
+
+  /** @param {'csv' | 'json'} format */
+  async function handleExport(format) {
+    const exportRows = selected.size > 0
+      ? [...selected].sort((a, b) => a - b).map((i) => rows[i]).filter(Boolean)
+      : rows
+    const content = format === 'csv' ? rowsToCsv(columns, exportRows) : rowsToJson(columns, exportRows)
+    const filename = buildExportFilename(activeTable, format)
+    await saveExportFile(content, filename, format)
   }
 
   async function runSql() {
@@ -985,7 +1020,6 @@
       sqlError = String(e)
     } finally {
       sqlLoading = false
-      saveActiveTabState()
     }
   }
 
@@ -1073,7 +1107,7 @@
     // Disconnect current (best-effort, non-blocking)
     disconnectPostgres().catch(() => {})
     connection = null
-    schemas = []; tables = []; activeSchema = 'public'; activeTable = null; tableFilter = ''
+    schemas = []; tables = []; indexes = []; activeSchema = 'public'; activeTable = null; tableFilter = ''
     resetTabs()
     // Connect to the chosen saved connection
     autoConnecting = true
@@ -1305,6 +1339,7 @@
       connectionName={connection?.name ?? ''}
       {schemas}
       {tables}
+      {indexes}
       bind:activeSchema
       {activeTable}
       {activeView}
@@ -1421,6 +1456,9 @@
             onpagesizechange={(s) => void handlePageSizeChange(s)}
             onpagechange={(p) => void handlePageChange(p)}
             ondeleteselected={() => void deleteSelectedRows()}
+            onexport={handleExport}
+            {hiddenColumns}
+            onhiddencolumnschange={(next) => { hiddenColumns = next }}
             onprev={async () => {
               if (page <= 1) return
               await handlePageChange(page - 1)
@@ -1437,6 +1475,7 @@
               {rows}
               {primaryKey}
               {foreignKeys}
+              {hiddenColumns}
               columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
               loading={loadingRows}
               saving={savingCell || deletingRows}

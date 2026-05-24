@@ -8,6 +8,21 @@ use tauri::State;
 pub struct TableInfo {
     pub name: String,
     pub row_count: i64,
+    /// "table" | "view" | "materialized_view" | "foreign_table"
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexInfo {
+    pub name: String,
+    pub table_name: String,
+    /// Comma-separated column names (empty for SQLite/D1)
+    pub columns: String,
+    /// "btree", "hash", "gist", "gin", "brin", etc.
+    pub index_type: String,
+    pub is_unique: bool,
+    pub is_primary: bool,
 }
 
 pub(crate) fn validate_ident(name: &str) -> Result<(), String> {
@@ -24,46 +39,54 @@ pub(crate) fn validate_ident(name: &str) -> Result<(), String> {
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
 
 const LIST_TABLES_SQL: &str = r#"
-        SELECT
-            t.table_name::text AS table_name,
-            CASE
-                WHEN s.n_live_tup IS NOT NULL THEN GREATEST(s.n_live_tup::bigint, 0)
-                WHEN c.reltuples >= 0 THEN c.reltuples::bigint
-                ELSE -1
-            END AS row_count
-        FROM information_schema.tables t
-        LEFT JOIN pg_catalog.pg_namespace n
-            ON n.nspname = t.table_schema
-        LEFT JOIN pg_catalog.pg_class c
-            ON c.relnamespace = n.oid
-            AND c.relname = t.table_name
-            AND c.relkind IN ('r', 'p', 'v', 'f', 'm')
-        LEFT JOIN pg_stat_user_tables s
-            ON s.schemaname = t.table_schema
-            AND s.relname = t.table_name
-        WHERE t.table_schema = $1
-          AND t.table_type IN ('BASE TABLE', 'VIEW', 'FOREIGN TABLE', 'MATERIALIZED VIEW')
-        ORDER BY t.table_name
-        "#;
+    SELECT
+        c.relname::text AS name,
+        CASE c.relkind
+            WHEN 'r' THEN 'table'
+            WHEN 'p' THEN 'table'
+            WHEN 'v' THEN 'view'
+            WHEN 'm' THEN 'materialized_view'
+            WHEN 'f' THEN 'foreign_table'
+            ELSE 'table'
+        END AS kind,
+        CASE
+            WHEN c.relkind IN ('v', 'f') THEN -1
+            WHEN s.n_live_tup IS NOT NULL THEN GREATEST(s.n_live_tup::bigint, 0)
+            WHEN c.reltuples >= 0 THEN c.reltuples::bigint
+            ELSE -1
+        END AS row_count
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_stat_user_tables s
+        ON s.schemaname = n.nspname
+        AND s.relname = c.relname
+    WHERE n.nspname = $1
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND NOT c.relispartition
+    ORDER BY c.relkind, c.relname
+    "#;
 
-const LIST_TABLES_FALLBACK_SQL: &str = r#"
-        SELECT
-            c.relname::text AS table_name,
-            CASE
-                WHEN s.n_live_tup IS NOT NULL THEN GREATEST(s.n_live_tup::bigint, 0)
-                WHEN c.reltuples >= 0 THEN c.reltuples::bigint
-                ELSE -1
-            END AS row_count
-        FROM pg_catalog.pg_class c
-        INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s
-            ON s.schemaname = n.nspname
-            AND s.relname = c.relname
-        WHERE n.nspname = $1
-          AND c.relkind IN ('r', 'p', 'v', 'f', 'm')
-          AND NOT c.relispartition
-        ORDER BY c.relname
-        "#;
+const LIST_INDEXES_SQL: &str = r#"
+    SELECT
+        i.relname::text AS name,
+        t.relname::text AS table_name,
+        COALESCE(string_agg(a.attname, ', ' ORDER BY x.ordinality), '') AS columns,
+        am.amname::text AS index_type,
+        ix.indisunique AS is_unique,
+        ix.indisprimary AS is_primary
+    FROM pg_catalog.pg_index ix
+    JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+    JOIN pg_catalog.pg_class t ON t.oid = ix.indrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_catalog.pg_am am ON am.oid = i.relam
+    LEFT JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS x(attnum, ordinality) ON TRUE
+    LEFT JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = t.oid AND a.attnum = x.attnum AND x.attnum > 0
+    WHERE n.nspname = $1
+      AND t.relkind IN ('r', 'p', 'm')
+    GROUP BY i.relname, t.relname, am.amname, ix.indisunique, ix.indisprimary
+    ORDER BY t.relname, ix.indisprimary DESC, i.relname
+    "#;
 
 async fn exact_row_count(pool: &PgPool, schema: &str, table: &str) -> Result<i64, String> {
     let sql = format!(r#"SELECT COUNT(*)::bigint FROM "{schema}"."{table}""#);
@@ -76,6 +99,11 @@ async fn exact_row_count(pool: &PgPool, schema: &str, table: &str) -> Result<i64
 async fn resolve_unknown_row_counts(pool: &PgPool, schema: &str, tables: &mut [TableInfo]) {
     for table in tables.iter_mut() {
         if table.row_count >= 0 {
+            continue;
+        }
+        // Views and foreign tables don't have reliable stats; skip exact count
+        if table.kind == "view" || table.kind == "foreign_table" {
+            table.row_count = 0;
             continue;
         }
         table.row_count = exact_row_count(pool, schema, &table.name).await.unwrap_or(0);
@@ -109,34 +137,43 @@ async fn list_tables_pg(pool: &PgPool, schema: &str) -> Result<Vec<TableInfo>, S
         .filter_map(|r| {
             Some(TableInfo {
                 name: r.try_get(0).ok()?,
-                row_count: r.try_get::<i64, _>(1).unwrap_or(-1),
+                kind: r.try_get::<String, _>(1).unwrap_or_else(|_| "table".to_string()),
+                row_count: r.try_get::<i64, _>(2).unwrap_or(-1),
             })
         })
         .collect();
 
-    if tables.is_empty() {
-        let rows = sqlx::query(LIST_TABLES_FALLBACK_SQL)
-            .bind(schema)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("Failed to list tables: {e}"))?;
-        tables = rows
-            .iter()
-            .filter_map(|r| {
-                Some(TableInfo { name: r.try_get(0).ok()?, row_count: r.try_get::<i64, _>(1).unwrap_or(-1) })
-            })
-            .collect();
-    }
-
     resolve_unknown_row_counts(pool, schema, &mut tables).await;
     Ok(tables)
+}
+
+async fn list_indexes_pg(pool: &PgPool, schema: &str) -> Result<Vec<IndexInfo>, String> {
+    let rows = sqlx::query(LIST_INDEXES_SQL)
+        .bind(schema)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to list indexes: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            Some(IndexInfo {
+                name: r.try_get(0).ok()?,
+                table_name: r.try_get(1).ok()?,
+                columns: r.try_get::<String, _>(2).unwrap_or_default(),
+                index_type: r.try_get::<String, _>(3).unwrap_or_else(|_| "btree".to_string()),
+                is_unique: r.try_get::<bool, _>(4).unwrap_or(false),
+                is_primary: r.try_get::<bool, _>(5).unwrap_or(false),
+            })
+        })
+        .collect())
 }
 
 // ── SQLite / D1 ───────────────────────────────────────────────────────────────
 
 async fn list_tables_sqlite(pool: &sqlx::SqlitePool) -> Result<Vec<TableInfo>, String> {
     let rows = sqlx::query(
-        "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
+        "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
     )
     .fetch_all(pool)
     .await
@@ -145,15 +182,18 @@ async fn list_tables_sqlite(pool: &sqlx::SqlitePool) -> Result<Vec<TableInfo>, S
     let mut tables: Vec<TableInfo> = rows
         .iter()
         .filter_map(|r| {
-            Some(TableInfo {
-                name: r.try_get::<Option<String>, _>(0).ok().flatten()?,
-                row_count: -1,
-            })
+            let name = r.try_get::<Option<String>, _>(0).ok().flatten()?;
+            let ty = r.try_get::<Option<String>, _>(1).ok().flatten().unwrap_or_default();
+            let kind = if ty == "view" { "view".to_string() } else { "table".to_string() };
+            Some(TableInfo { name, kind, row_count: -1 })
         })
         .collect();
 
-    // Fill row counts
     for t in tables.iter_mut() {
+        if t.kind == "view" {
+            t.row_count = 0;
+            continue;
+        }
         let sql = format!("SELECT COUNT(*) FROM \"{}\"", t.name.replace('"', "\"\""));
         if let Ok(row) = sqlx::query(&sql).fetch_one(pool).await {
             t.row_count = row.try_get::<Option<i64>, _>(0).ok().flatten().unwrap_or(0);
@@ -162,25 +202,61 @@ async fn list_tables_sqlite(pool: &sqlx::SqlitePool) -> Result<Vec<TableInfo>, S
     Ok(tables)
 }
 
+async fn list_indexes_sqlite(pool: &sqlx::SqlitePool) -> Result<Vec<IndexInfo>, String> {
+    let rows = sqlx::query(
+        "SELECT name, tbl_name, COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY tbl_name, name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list indexes: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let name = r.try_get::<Option<String>, _>(0).ok().flatten()?;
+            let table_name = r.try_get::<Option<String>, _>(1).ok().flatten()?;
+            let sql = r.try_get::<String, _>(2).unwrap_or_default().to_uppercase();
+            let is_unique = sql.contains("UNIQUE");
+            let is_primary = name.starts_with("sqlite_autoindex_");
+            Some(IndexInfo {
+                name,
+                table_name,
+                columns: String::new(),
+                index_type: "btree".to_string(),
+                is_unique,
+                is_primary,
+            })
+        })
+        .collect())
+}
+
 async fn list_tables_d1(cfg: &super::connection::D1Config) -> Result<Vec<TableInfo>, String> {
     let result = super::d1::query(
         cfg,
-        "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
+        "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
         vec![],
     )
     .await?;
 
     let name_idx = result.columns.iter().position(|c| c.name == "name").unwrap_or(0);
+    let type_idx = result.columns.iter().position(|c| c.name == "type").unwrap_or(1);
+
     let mut tables: Vec<TableInfo> = result
         .rows
         .iter()
         .filter_map(|r| {
             let name = r.get(name_idx)?.as_str()?.to_string();
-            Some(TableInfo { name, row_count: -1 })
+            let ty = r.get(type_idx).and_then(|v| v.as_str()).unwrap_or("table");
+            let kind = if ty == "view" { "view".to_string() } else { "table".to_string() };
+            Some(TableInfo { name, kind, row_count: -1 })
         })
         .collect();
 
     for t in tables.iter_mut() {
+        if t.kind == "view" {
+            t.row_count = 0;
+            continue;
+        }
         let sql = format!("SELECT COUNT(*) FROM \"{}\"", t.name.replace('"', "\"\""));
         if let Ok(res) = super::d1::query(cfg, &sql, vec![]).await {
             if let Some(row) = res.rows.first() {
@@ -189,6 +265,39 @@ async fn list_tables_d1(cfg: &super::connection::D1Config) -> Result<Vec<TableIn
         }
     }
     Ok(tables)
+}
+
+async fn list_indexes_d1(cfg: &super::connection::D1Config) -> Result<Vec<IndexInfo>, String> {
+    let result = super::d1::query(
+        cfg,
+        "SELECT name, tbl_name, COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' ORDER BY tbl_name, name",
+        vec![],
+    )
+    .await?;
+
+    let name_idx = result.columns.iter().position(|c| c.name == "name").unwrap_or(0);
+    let tbl_idx = result.columns.iter().position(|c| c.name == "tbl_name").unwrap_or(1);
+    let sql_idx = result.columns.iter().position(|c| c.name == "sql").unwrap_or(2);
+
+    Ok(result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            let name = r.get(name_idx)?.as_str()?.to_string();
+            let table_name = r.get(tbl_idx)?.as_str()?.to_string();
+            let sql = r.get(sql_idx).and_then(|v| v.as_str()).unwrap_or("").to_uppercase();
+            let is_unique = sql.contains("UNIQUE");
+            let is_primary = name.starts_with("sqlite_autoindex_");
+            Some(IndexInfo {
+                name,
+                table_name,
+                columns: String::new(),
+                index_type: "btree".to_string(),
+                is_unique,
+                is_primary,
+            })
+        })
+        .collect())
 }
 
 // ── Public dispatch ───────────────────────────────────────────────────────────
@@ -208,5 +317,16 @@ pub async fn list_tables(state: State<'_, DbState>, schema: String) -> Result<Ve
         }
         ActiveConnection::Sqlite(pool) => list_tables_sqlite(&pool).await,
         ActiveConnection::D1(cfg) => list_tables_d1(&cfg).await,
+    }
+}
+
+pub async fn list_indexes(state: State<'_, DbState>, schema: String) -> Result<Vec<IndexInfo>, String> {
+    match require_conn(&state)? {
+        ActiveConnection::Postgres(pool) => {
+            validate_ident(&schema)?;
+            list_indexes_pg(&pool, &schema).await
+        }
+        ActiveConnection::Sqlite(pool) => list_indexes_sqlite(&pool).await,
+        ActiveConnection::D1(cfg) => list_indexes_d1(&cfg).await,
     }
 }

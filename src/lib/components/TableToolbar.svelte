@@ -1,29 +1,33 @@
 <script>
-  import PanelLeft from '@lucide/svelte/icons/panel-left'
-  import ChevronLeft from '@lucide/svelte/icons/chevron-left'
-  import ChevronRight from '@lucide/svelte/icons/chevron-right'
-  import History from '@lucide/svelte/icons/history'
-  import ListFilter from '@lucide/svelte/icons/list-filter'
-  import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down'
-  import ArrowUp from '@lucide/svelte/icons/arrow-up'
-  import ArrowDown from '@lucide/svelte/icons/arrow-down'
-  import Plus from '@lucide/svelte/icons/plus'
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw'
-  import MoreHorizontal from '@lucide/svelte/icons/more-horizontal'
-  import Trash2 from '@lucide/svelte/icons/trash-2'
-  import Search from '@lucide/svelte/icons/search'
-  import X from '@lucide/svelte/icons/x'
-  import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js'
-  import * as Select from '$lib/components/ui/select/index.js'
-  import { Input } from '$lib/components/ui/input/index.js'
-  import { cn } from '$lib/utils.js'
+  import PanelLeft from "@lucide/svelte/icons/panel-left";
+  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import History from "@lucide/svelte/icons/history";
+  import ListFilter from "@lucide/svelte/icons/list-filter";
+  import ArrowUpDown from "@lucide/svelte/icons/arrow-up-down";
+  import ArrowUp from "@lucide/svelte/icons/arrow-up";
+  import ArrowDown from "@lucide/svelte/icons/arrow-down";
+  import Plus from "@lucide/svelte/icons/plus";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import MoreHorizontal from "@lucide/svelte/icons/more-horizontal";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import FileDown from "@lucide/svelte/icons/file-down";
+  import Columns3 from "@lucide/svelte/icons/columns-3";
+  import Eye from "@lucide/svelte/icons/eye";
+  import EyeOff from "@lucide/svelte/icons/eye-off";
+  import Search from "@lucide/svelte/icons/search";
+  import X from "@lucide/svelte/icons/x";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { cn } from "$lib/utils.js";
   import {
     FILTER_OPS,
     PAGE_SIZE_OPTIONS,
     activeFilters,
     createFilter,
-  } from '$lib/table-query.js'
-  import { formatCompactCount } from '$lib/table-list.js'
+  } from "$lib/table-query.js";
+  import { formatCompactCount } from "$lib/table-list.js";
 
   /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
   /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
@@ -40,7 +44,7 @@
     hasPrimaryKey = false,
     deleting = false,
     columns = [],
-    rowSearch = '',
+    rowSearch = "",
     rowSort = null,
     rowFilters = [],
     ontogglesidebar = () => {},
@@ -53,135 +57,160 @@
     onsortchange = () => {},
     onfilterschange = () => {},
     ondeleteselected = () => {},
-  } = $props()
+    /** @type {(format: 'csv' | 'json') => void | Promise<void>} */
+    onexport = () => {},
+    /** @type {Set<string>} */
+    hiddenColumns = new Set(),
+    /** @type {(next: Set<string>) => void} */
+    onhiddencolumnschange = () => {},
+  } = $props();
 
   const deleteLabel = $derived(
     selectedCount === 1
-      ? 'Delete 1 row'
+      ? "Delete 1 row"
       : `Delete ${formatCompactCount(selectedCount)} rows`,
-  )
+  );
 
-  const from = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1)
-  const to = $derived(Math.min(page * pageSize, total))
-  const pageCount = $derived(Math.max(1, Math.ceil(total / pageSize) || 1))
-  const canPrev = $derived(page > 1)
-  const canNext = $derived(page * pageSize < total)
+  const from = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1);
+  const to = $derived(Math.min(page * pageSize, total));
+  const pageCount = $derived(Math.max(1, Math.ceil(total / pageSize) || 1));
+  const canPrev = $derived(page > 1);
+  const canNext = $derived(page * pageSize < total);
 
-  const filterCount = $derived(activeFilters(rowFilters).length)
+  const filterCount = $derived(activeFilters(rowFilters).length);
   const sortLabel = $derived(
     rowSort?.column
-      ? `${rowSort.column} ${rowSort.direction === 'desc' ? '↓' : '↑'}`
-      : 'Sort',
-  )
+      ? `${rowSort.column} ${rowSort.direction === "desc" ? "↓" : "↑"}`
+      : "Sort",
+  );
 
-  let filterMenuOpen = $state(false)
-  let sortMenuOpen = $state(false)
+  let filterMenuOpen = $state(false);
+  let sortMenuOpen = $state(false);
+  let columnsMenuOpen = $state(false);
+
+  const hiddenCount = $derived(hiddenColumns.size);
+
+  /** @param {string} name */
+  function toggleColumn(name) {
+    const next = new Set(hiddenColumns);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    onhiddencolumnschange(next);
+  }
+
+  function showAllColumns() {
+    onhiddencolumnschange(new Set());
+  }
   /** @type {HTMLInputElement | null} */
-  let searchInputRef = $state(null)
+  let searchInputRef = $state(null);
 
   // Local value so the input is not controlled by the prop during typing.
   // Keeps focus when the parent triggers a re-render (e.g. loading state).
-  let localSearch = $state(rowSearch)
-  let searchDebounce = /** @type {ReturnType<typeof setTimeout> | null} */ (null)
+  let localSearch = $state(rowSearch);
+  let searchDebounce = /** @type {ReturnType<typeof setTimeout> | null} */ (
+    null
+  );
 
   // Sync from parent only when the prop changes from outside (e.g. table switch resets to '').
   $effect(() => {
-    localSearch = rowSearch
-  })
+    localSearch = rowSearch;
+  });
 
   export function focusRowSearch() {
-    searchInputRef?.focus()
-    searchInputRef?.select()
+    searchInputRef?.focus();
+    searchInputRef?.select();
   }
 
   /** Page numbers shown in the page dropdown (windowed when many pages). */
   const pageMenuItems = $derived.by(() => {
-    const n = pageCount
-    if (n <= 40) return Array.from({ length: n }, (_, i) => i + 1)
-    const lo = Math.max(1, page - 15)
-    const hi = Math.min(n, page + 15)
-    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i)
-  })
+    const n = pageCount;
+    if (n <= 40) return Array.from({ length: n }, (_, i) => i + 1);
+    const lo = Math.max(1, page - 15);
+    const hi = Math.min(n, page + 15);
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  });
 
   const iconBtn =
-    'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30'
+    "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30";
 
   /** Matches the “more actions” / delete menu panel */
-  const menuContent = 'w-44 text-ui-sm'
+  const menuContent = "w-44 text-ui-sm";
 
   /** Compact shadcn select trigger for pagination */
   const pageSelectTrigger =
-    'h-7 min-w-0 gap-1 px-2 text-ui-sm font-normal tabular-nums shadow-none'
+    "h-7 min-w-0 gap-1 px-2 text-ui-sm font-normal tabular-nums shadow-none";
 
   const filterSelectTrigger =
-    'h-7 min-w-0 flex-1 gap-1 px-2 text-ui-sm font-normal shadow-none'
+    "h-7 min-w-0 flex-1 gap-1 px-2 text-ui-sm font-normal shadow-none";
 
-  const filterOpTrigger = 'h-7 w-[7.5rem] shrink-0 gap-1 px-2 text-ui-sm font-normal shadow-none'
+  const filterOpTrigger =
+    "h-7 w-[7.5rem] shrink-0 gap-1 px-2 text-ui-sm font-normal shadow-none";
 
   /** @param {FilterOp} op */
   function filterOpLabel(op) {
-    return FILTER_OPS.find((o) => o.value === op)?.label ?? op
+    return FILTER_OPS.find((o) => o.value === op)?.label ?? op;
   }
 
   /** @param {string} id */
   function filterNeedsValue(id) {
-    const f = rowFilters.find((x) => x.id === id)
-    if (!f) return true
-    return FILTER_OPS.find((o) => o.value === f.op)?.needsValue ?? true
+    const f = rowFilters.find((x) => x.id === id);
+    if (!f) return true;
+    return FILTER_OPS.find((o) => o.value === f.op)?.needsValue ?? true;
   }
 
   /** @param {string} value */
   function handleSearchInput(value) {
-    localSearch = value
-    if (searchDebounce) clearTimeout(searchDebounce)
+    localSearch = value;
+    if (searchDebounce) clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => {
-      searchDebounce = null
-      onsearchchange(value)
-    }, 250)
+      searchDebounce = null;
+      onsearchchange(value);
+    }, 250);
   }
 
   function clearSearch() {
-    localSearch = ''
-    if (searchDebounce) clearTimeout(searchDebounce)
-    searchDebounce = null
-    onsearchchange('')
+    localSearch = "";
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = null;
+    onsearchchange("");
   }
 
   function addFilter() {
-    const col = columns[0]?.name ?? ''
-    onfilterschange([...rowFilters, createFilter(col)])
-    filterMenuOpen = true
+    const col = columns[0]?.name ?? "";
+    onfilterschange([...rowFilters, createFilter(col)]);
+    filterMenuOpen = true;
   }
 
   /** @param {string} id */
   function removeFilter(id) {
-    onfilterschange(rowFilters.filter((f) => f.id !== id))
+    onfilterschange(rowFilters.filter((f) => f.id !== id));
   }
 
   function clearFilters() {
-    onfilterschange([])
+    onfilterschange([]);
   }
 
   /** @param {TableFilter[]} next */
   function updateFilters(next) {
-    onfilterschange(next)
+    onfilterschange(next);
   }
 
   /** @param {string} id @param {Partial<TableFilter>} patch */
   function patchFilter(id, patch) {
-    updateFilters(rowFilters.map((f) => (f.id === id ? { ...f, ...patch } : f)))
+    updateFilters(
+      rowFilters.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+    );
   }
 
   function clearSort() {
-    onsortchange(null)
+    onsortchange(null);
   }
 
   /** @param {string} column @param {'asc' | 'desc'} direction */
   function applySort(column, direction) {
-    onsortchange(/** @type {TableSort} */ ({ column, direction }))
-    sortMenuOpen = false
+    onsortchange(/** @type {TableSort} */ ({ column, direction }));
+    sortMenuOpen = false;
   }
-
 </script>
 
 <header
@@ -192,7 +221,7 @@
   <div class="order-1 flex shrink-0 items-center gap-0.5">
     <button
       type="button"
-      class={cn(iconBtn, !sidebarOpen && 'bg-accent text-foreground')}
+      class={cn(iconBtn, !sidebarOpen && "bg-accent text-foreground")}
       title="Toggle sidebar (⌘B)"
       aria-pressed={sidebarOpen}
       onclick={ontogglesidebar}
@@ -210,15 +239,17 @@
     class="order-3 flex min-w-0 flex-1 basis-full items-center gap-1 md:order-2 md:min-w-[12rem] md:basis-auto lg:max-w-xl"
   >
     <div class="relative flex h-7 min-w-0 flex-1 items-center">
-      <Search class="pointer-events-none absolute left-2 size-3.5 text-muted-foreground" />
+      <Search
+        class="pointer-events-none absolute left-2 size-3.5 text-muted-foreground"
+      />
       <Input
         bind:ref={searchInputRef}
         type="text"
         role="searchbox"
         aria-label="Search all columns"
         class={cn(
-          'h-7 w-full min-w-0 border-input bg-input/30 pl-7 pr-7 text-ui-sm shadow-none focus-visible:ring-2',
-          localSearch.trim() && 'border-ring/40',
+          "h-7 w-full min-w-0 border-input bg-input/30 pl-7 pr-7 text-ui-sm shadow-none focus-visible:ring-2",
+          localSearch.trim() && "border-ring/40",
         )}
         placeholder="Search all columns…"
         value={localSearch}
@@ -228,8 +259,8 @@
       <button
         type="button"
         class={cn(
-          'absolute right-1 inline-flex size-5 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground',
-          localSearch ? 'opacity-100' : 'pointer-events-none opacity-0',
+          "absolute right-1 inline-flex size-5 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
+          localSearch ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         aria-label="Clear search"
         tabindex={localSearch ? 0 : -1}
@@ -243,8 +274,8 @@
       <DropdownMenu.Trigger
         class={cn(
           iconBtn,
-          'relative shrink-0',
-          (filterCount > 0 || filterMenuOpen) && 'bg-accent text-foreground',
+          "relative shrink-0",
+          (filterCount > 0 || filterMenuOpen) && "bg-accent text-foreground",
         )}
         title="Filter rows"
         disabled={loading || columns.length === 0}
@@ -263,8 +294,8 @@
         align="center"
         class="w-[min(22rem,calc(100vw-1.5rem))] p-0 text-ui-sm"
         onInteractOutside={(e) => {
-          const t = /** @type {HTMLElement | null} */ (e.target)
-          if (t?.closest('[data-slot="select-content"]')) e.preventDefault()
+          const t = /** @type {HTMLElement | null} */ (e.target);
+          if (t?.closest('[data-slot="select-content"]')) e.preventDefault();
         }}
       >
         <div class="border-b border-border px-3 py-2.5">
@@ -275,7 +306,9 @@
         </div>
 
         {#if columns.length === 0}
-          <p class="px-3 py-4 text-ui-xs text-muted-foreground">Open a table to filter rows.</p>
+          <p class="px-3 py-4 text-ui-xs text-muted-foreground">
+            Open a table to filter rows.
+          </p>
         {:else}
           <div class="max-h-72 overflow-y-auto p-2">
             {#if rowFilters.length === 0}
@@ -294,7 +327,7 @@
                           type="single"
                           value={filter.column}
                           onValueChange={(v) => {
-                            if (v) patchFilter(filter.id, { column: v })
+                            if (v) patchFilter(filter.id, { column: v });
                           }}
                         >
                           <Select.Trigger
@@ -302,7 +335,9 @@
                             class={filterSelectTrigger}
                             title="Column"
                           >
-                            <span class="truncate">{filter.column || 'Column'}</span>
+                            <span class="truncate"
+                              >{filter.column || "Column"}</span
+                            >
                           </Select.Trigger>
                           <Select.Content class="max-h-56">
                             {#each columns as col (col.name)}
@@ -315,11 +350,20 @@
                           type="single"
                           value={filter.op}
                           onValueChange={(v) => {
-                            if (v) patchFilter(filter.id, { op: /** @type {FilterOp} */ (v) })
+                            if (v)
+                              patchFilter(filter.id, {
+                                op: /** @type {FilterOp} */ (v),
+                              });
                           }}
                         >
-                          <Select.Trigger size="sm" class={filterOpTrigger} title="Condition">
-                            <span class="truncate">{filterOpLabel(filter.op)}</span>
+                          <Select.Trigger
+                            size="sm"
+                            class={filterOpTrigger}
+                            title="Condition"
+                          >
+                            <span class="truncate"
+                              >{filterOpLabel(filter.op)}</span
+                            >
                           </Select.Trigger>
                           <Select.Content class="max-h-56">
                             {#each FILTER_OPS as op (op.value)}
@@ -335,7 +379,9 @@
                           value={filter.value}
                           placeholder="Value…"
                           oninput={(e) =>
-                            patchFilter(filter.id, { value: e.currentTarget.value })}
+                            patchFilter(filter.id, {
+                              value: e.currentTarget.value,
+                            })}
                         />
                       {/if}
                     </div>
@@ -383,15 +429,18 @@
       <DropdownMenu.Trigger
         class={cn(
           iconBtn,
-          'shrink-0',
-          (rowSort?.column || sortMenuOpen) && 'bg-accent text-foreground',
+          "shrink-0",
+          (rowSort?.column || sortMenuOpen) && "bg-accent text-foreground",
         )}
         title={sortLabel}
         disabled={loading || columns.length === 0}
       >
         <ArrowUpDown class="size-3.5" />
       </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="center" class={cn(menuContent, 'max-h-64 overflow-y-auto')}>
+      <DropdownMenu.Content
+        align="center"
+        class={cn(menuContent, "max-h-64 overflow-y-auto")}
+      >
         <DropdownMenu.Label>Sort by</DropdownMenu.Label>
         {#if rowSort?.column}
           <DropdownMenu.Item onSelect={clearSort}>
@@ -406,22 +455,80 @@
               <span class="truncate">{col.name}</span>
               {#if rowSort?.column === col.name}
                 <span class="ml-auto text-muted-foreground">
-                  {rowSort.direction === 'desc' ? '↓' : '↑'}
+                  {rowSort.direction === "desc" ? "↓" : "↑"}
                 </span>
               {/if}
             </DropdownMenu.SubTrigger>
             <DropdownMenu.SubContent class={menuContent}>
-              <DropdownMenu.Item onSelect={() => applySort(col.name, 'asc')}>
+              <DropdownMenu.Item onSelect={() => applySort(col.name, "asc")}>
                 <ArrowUp class="size-3.5" />
                 Ascending
               </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => applySort(col.name, 'desc')}>
+              <DropdownMenu.Item onSelect={() => applySort(col.name, "desc")}>
                 <ArrowDown class="size-3.5" />
                 Descending
               </DropdownMenu.Item>
             </DropdownMenu.SubContent>
           </DropdownMenu.Sub>
         {/each}
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+
+    <DropdownMenu.Root bind:open={columnsMenuOpen}>
+      <DropdownMenu.Trigger
+        class={cn(
+          iconBtn,
+          "relative shrink-0",
+          (hiddenCount > 0 || columnsMenuOpen) && "bg-accent text-foreground",
+        )}
+        title="Toggle columns"
+        disabled={loading || columns.length === 0}
+      >
+        <Columns3 class="size-3.5" />
+        {#if hiddenCount > 0}
+          <span
+            class="absolute -top-0.5 -right-0.5 flex size-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-ui-3xs font-medium text-primary-foreground"
+            aria-hidden="true"
+          >
+            {hiddenCount}
+          </span>
+        {/if}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="center" class="w-44 p-0 text-ui-sm">
+        <div class="border-b border-border px-3 py-2">
+          <p class="font-medium text-foreground">Columns</p>
+        </div>
+        <div class="max-h-64 overflow-y-auto p-1">
+          {#each columns as col (col.name)}
+            {@const hidden = hiddenColumns.has(col.name)}
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-ui-sm hover:bg-accent hover:text-foreground"
+              onclick={() => toggleColumn(col.name)}
+            >
+              {#if hidden}
+                <EyeOff class="size-3.5 shrink-0 text-muted-foreground" />
+              {:else}
+                <Eye class="size-3.5 shrink-0" />
+              {/if}
+              <span class={cn("truncate", hidden && "text-muted-foreground")}
+                >{col.name}</span
+              >
+            </button>
+          {/each}
+        </div>
+        {#if hiddenCount > 0}
+          <div class="border-t border-border p-1">
+            <button
+              type="button"
+              class="flex w-full items-center gap-1 rounded-sm px-2 py-1.5 text-ui-sm hover:bg-accent hover:text-foreground"
+              onclick={showAllColumns}
+            >
+              <Eye class="size-3.5" />
+              Show all columns
+            </button>
+          </div>
+        {/if}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
 
@@ -446,9 +553,13 @@
     >
     <span
       class="hidden text-ui-sm text-muted-foreground tabular-nums lg:inline"
-      title="{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {total.toLocaleString('en-US')}"
+      title="{from.toLocaleString('en-US')}–{to.toLocaleString(
+        'en-US',
+      )} of {total.toLocaleString('en-US')}"
     >
-      {formatCompactCount(from)}–{formatCompactCount(to)} of {formatCompactCount(total)}
+      {formatCompactCount(from)}–{formatCompactCount(to)} of {formatCompactCount(
+        total,
+      )}
     </span>
 
     <span class="mx-0.5 hidden h-4 w-px bg-border lg:inline"></span>
@@ -457,7 +568,7 @@
       type="single"
       value={String(pageSize)}
       onValueChange={(v) => {
-        if (v) onpagesizechange(Number(v))
+        if (v) onpagesizechange(Number(v));
       }}
       disabled={loading}
     >
@@ -480,7 +591,7 @@
       type="single"
       value={String(page)}
       onValueChange={(v) => {
-        if (v) onpagechange(Number(v))
+        if (v) onpagechange(Number(v));
       }}
       disabled={loading || total === 0}
     >
@@ -501,8 +612,9 @@
 
     <span
       class="hidden text-ui-xs text-muted-foreground tabular-nums sm:inline"
-      title={pageCount.toLocaleString('en-US')}
-    >of {formatCompactCount(pageCount)}</span>
+      title={pageCount.toLocaleString("en-US")}
+      >of {formatCompactCount(pageCount)}</span
+    >
 
     <button
       type="button"
@@ -530,18 +642,40 @@
       title="Refresh data (⌘R)"
       aria-label="Refresh data"
     >
-      <RefreshCw class={cn('size-3.5', loading && 'animate-spin')} />
+      <RefreshCw class={cn("size-3.5", loading && "animate-spin")} />
     </button>
 
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
-        class={cn(iconBtn, selectedCount > 0 && 'text-foreground')}
+        class={cn(iconBtn, selectedCount > 0 && "text-foreground")}
         title="More actions"
         disabled={loading || deleting}
       >
         <MoreHorizontal class="size-3.5" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class={menuContent}>
+        <DropdownMenu.Label
+          class="text-ui-xs font-normal text-muted-foreground"
+        >
+          {selectedCount > 0
+            ? `${selectedCount} row${selectedCount === 1 ? "" : "s"} selected`
+            : "Current page"}
+        </DropdownMenu.Label>
+        <DropdownMenu.Item
+          disabled={total === 0}
+          onSelect={() => onexport("csv")}
+        >
+          <FileDown />
+          Export as CSV
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          disabled={total === 0}
+          onSelect={() => onexport("json")}
+        >
+          <FileDown />
+          Export as JSON
+        </DropdownMenu.Item>
+        <DropdownMenu.Separator />
         <DropdownMenu.Item
           variant="destructive"
           disabled={selectedCount === 0 || !hasPrimaryKey || deleting}

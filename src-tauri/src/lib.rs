@@ -8,6 +8,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(DbState::default())
         .setup(|app| {
             let window = tauri::WebviewWindowBuilder::new(
@@ -19,6 +20,8 @@ pub fn run() {
             .inner_size(1280.0, 800.0)
             .min_inner_size(960.0, 600.0)
             .resizable(true)
+            .maximized(true)
+            .decorations(false)
             .on_navigation(|url| {
                 let scheme = url.scheme();
                 if matches!(scheme, "tauri" | "ipc") {
@@ -42,6 +45,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::save_file,
             commands::restart_app,
             commands::toggle_devtools,
             commands::test_postgres_connection,
@@ -53,6 +57,7 @@ pub fn run() {
             commands::connect_d1_db,
             commands::pg_list_schemas,
             commands::pg_list_tables,
+            commands::pg_list_indexes,
             commands::pg_get_table_rows,
             commands::pg_execute_sql,
             commands::pg_update_table_cell,

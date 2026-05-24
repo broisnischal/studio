@@ -13,4 +13,4 @@ pub use query::{
     delete_table_row, delete_table_rows, execute_sql, get_table_rows, update_table_cell, RowFilter,
     SqlResult, TableRows,
 };
-pub use schema::{list_schemas, list_tables, TableInfo};
+pub use schema::{list_schemas, list_tables, list_indexes, TableInfo, IndexInfo};

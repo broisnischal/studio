@@ -33,7 +33,8 @@
   }
 
   onMount(() => {
-    // Check after a short delay so the app finishes loading first
+    // Skip in dev (http://localhost) — no GitHub release/latest.json exists there
+    if (window.location.protocol === 'http:') return
     const t = setTimeout(() => void checkForUpdate(), 3000)
     return () => clearTimeout(t)
   })

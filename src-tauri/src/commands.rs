@@ -1,3 +1,9 @@
+/// Write text content to a path chosen by the user via a native save dialog.
+#[tauri::command]
+pub async fn save_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 /// Restart the application — called after an update is installed.
 #[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) {
@@ -23,8 +29,8 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
 use crate::db::{
     connect, connect_d1, connect_sqlite, disconnect,
     delete_table_row, delete_table_rows, execute_sql, get_table_rows,
-    list_schemas, list_tables, test_connection, test_d1_connection, test_sqlite_connection,
-    update_table_cell, ConnectionConfig, D1Config, DbState, SqlResult, SqliteConfig, TableInfo,
+    list_schemas, list_tables, list_indexes, test_connection, test_d1_connection, test_sqlite_connection,
+    update_table_cell, ConnectionConfig, D1Config, DbState, IndexInfo, SqlResult, SqliteConfig, TableInfo,
     TableRows,
 };
 use serde_json::Value;
@@ -96,6 +102,14 @@ pub async fn pg_list_tables(
     schema: String,
 ) -> Result<Vec<TableInfo>, String> {
     list_tables(state, schema).await
+}
+
+#[tauri::command]
+pub async fn pg_list_indexes(
+    state: State<'_, DbState>,
+    schema: String,
+) -> Result<Vec<IndexInfo>, String> {
+    list_indexes(state, schema).await
 }
 
 #[tauri::command]

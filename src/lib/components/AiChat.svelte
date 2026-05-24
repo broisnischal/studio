@@ -252,15 +252,16 @@
 
   /** @type {Map<string, string>} */
   const mermaidCache = new Map()
+  const MERMAID_CACHE_MAX = 30
 
-  /** Render mermaid code to SVG. Removes fixed dimensions so CSS controls sizing.
-   *  Diagram colors are set on the <svg> so app theme tokens cannot leak in. */
+  /** Render mermaid code to SVG. Results cached with LRU eviction. */
   function processMermaidSvg(code) {
     if (mermaidCache.has(code)) return /** @type {string} */ (mermaidCache.get(code))
     try {
-      // Keep explicit SVG dimensions — compact diagrams stay small;
-      // CSS max-width:100% prevents overflow on wide ones.
       const svg = renderMermaidSync(code, MERMAID_THEME.light)
+      if (mermaidCache.size >= MERMAID_CACHE_MAX) {
+        mermaidCache.delete(/** @type {string} */ (mermaidCache.keys().next().value))
+      }
       mermaidCache.set(code, svg)
       return svg
     } catch (e) {
@@ -316,10 +317,12 @@
       node.classList.add('is-dragging')
     }
 
+    let rafId = 0
     const onMove = (/** @type {MouseEvent} */ e) => {
       if (!dragging) return
       tx = e.clientX - ox; ty = e.clientY - oy
-      applyTransform()
+      if (rafId) cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => { rafId = 0; applyTransform() })
     }
 
     const onUp = () => {
@@ -342,6 +345,7 @@
     return {
       destroy() {
         themeObs.disconnect()
+        if (rafId) cancelAnimationFrame(rafId)
         node.removeEventListener('wheel', onWheel)
         node.removeEventListener('mousedown', onDown)
         window.removeEventListener('mousemove', onMove)

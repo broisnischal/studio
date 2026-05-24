@@ -22,7 +22,7 @@ document.addEventListener('click', async (e) => {
   e.preventDefault()
   e.stopImmediatePropagation()
   try {
-    const { open } = await import('@tauri-apps/plugin-opener')
+    const { openUrl: open } = await import('@tauri-apps/plugin-opener')
     await open(href)
   } catch {
     // ignore in dev/browser environments without Tauri

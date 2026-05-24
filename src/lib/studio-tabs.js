@@ -25,6 +25,7 @@
  * @property {number | null} inspectorRow
  * @property {{ rowIdx: number, colIdx: number, draft: string, original: string } | null} editingCell
  * @property {boolean} savingCell
+ * @property {Set<string>} hiddenColumns
  */
 
 /** @typedef {object} SqlTabState
@@ -63,11 +64,12 @@ export function cloneTableTabState(state) {
       referencedSchema: fk.referencedSchema ?? fk.referenced_schema ?? '',
       referencedTable: fk.referencedTable ?? fk.referenced_table ?? '',
     })),
-    rows: state.rows.map((r) => [...r]),
+    rows: [...state.rows],
     rowFilters: state.rowFilters.map((f) => ({ ...f })),
     rowSort: state.rowSort ? { ...state.rowSort } : null,
     selected: new Set(state.selected),
     editingCell: state.editingCell ? { ...state.editingCell } : null,
+    hiddenColumns: new Set(state.hiddenColumns),
   }
 }
 
@@ -76,7 +78,7 @@ export function cloneSqlTabState(state) {
   return {
     ...state,
     sqlColumns: [...state.sqlColumns],
-    sqlRows: state.sqlRows.map((r) => [...r]),
+    sqlRows: [...state.sqlRows],
   }
 }
 
@@ -103,6 +105,7 @@ export function createTableTabState(schema = 'public', table = null) {
     inspectorRow: null,
     editingCell: null,
     savingCell: false,
+    hiddenColumns: new Set(),
   }
 }
 

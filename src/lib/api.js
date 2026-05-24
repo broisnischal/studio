@@ -97,6 +97,15 @@ export async function listTables(schema) {
   }
 }
 
+/** @param {string} schema */
+export async function listIndexes(schema) {
+  try {
+    return await invoke('pg_list_indexes', { schema })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}
+
 /**
  * @param {string} schema
  * @param {string} table

@@ -19,6 +19,8 @@
     saveLayout,
   } from '$lib/stores/layout.js'
   import { formatCompactCount } from '$lib/table-list.js'
+  import { cellLinkHref, cellUrlType } from '$lib/cell-display.js'
+  import ExternalLink from '@lucide/svelte/icons/external-link'
 
   /**
    * @typedef {{ kind: 'cell', rowIdx: number, colIdx: number } | { kind: 'row', rowIdx: number } | { kind: 'rows', rowIndices: number[] }} InspectorTarget
@@ -34,7 +36,7 @@
   const initialLayout = loadLayout()
   let width = $state(initialLayout.inspectorWidth)
   let resizeStartWidth = initialLayout.inspectorWidth
-  /** @type {'normal' | 'json'} */
+  /** @type {'normal' | 'json' | 'preview'} */
   let viewMode = $state(initialLayout.inspectorView)
 
   const meta = $derived.by(() => {
@@ -80,10 +82,35 @@
   )
   const shikiLang = $derived(viewMode === 'json' ? 'json' : 'plaintext')
 
-  $effect(() => {
-    viewMode
-    saveLayout({ inspectorView: viewMode })
+  // Detect if the inspected cell value is a previewable URL
+  const cellPreviewHref = $derived.by(() => {
+    if (!target || target.kind !== 'cell') return null
+    const value = rows[target.rowIdx]?.[target.colIdx]
+    if (typeof value !== 'string') return null
+    return cellLinkHref(value)
   })
+  const cellPreviewType = $derived(cellUrlType(cellPreviewHref))
+  const hasPreview = $derived(cellPreviewType === 'image' || cellPreviewType === 'pdf')
+
+  // Fall back from preview tab when navigating to a non-previewable cell
+  $effect(() => {
+    if (viewMode === 'preview' && !hasPreview) viewMode = 'normal'
+  })
+
+  $effect(() => {
+    if (viewMode !== 'preview') saveLayout({ inspectorView: viewMode })
+  })
+
+  async function openPreviewExternal() {
+    if (!cellPreviewHref) return
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+    if (isTauri) {
+      const { openUrl: open } = await import('@tauri-apps/plugin-opener')
+      await open(cellPreviewHref)
+    } else {
+      window.open(cellPreviewHref, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   async function copyJson() {
     if (!meta?.jsonText) return
@@ -147,14 +174,50 @@
         <Tabs.List class="studio-chrome mx-2 mt-2 h-8 w-auto shrink-0" data-studio-chrome>
           <Tabs.Trigger value="normal" class="px-3 text-ui-xs">Normal</Tabs.Trigger>
           <Tabs.Trigger value="json" class="px-3 text-ui-xs">JSON</Tabs.Trigger>
+          {#if hasPreview}
+            <Tabs.Trigger value="preview" class="px-3 text-ui-xs">Preview</Tabs.Trigger>
+          {/if}
         </Tabs.List>
 
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ShikiBlock
-            code={displayCode}
-            lang={shikiLang}
-            jsonInteractive={viewMode === 'json'}
-          />
+          {#if viewMode === 'preview' && cellPreviewHref}
+            <div class="flex min-h-0 flex-1 flex-col items-center justify-start gap-3 overflow-auto p-3">
+              {#if cellPreviewType === 'image'}
+                <img
+                  src={cellPreviewHref}
+                  alt=""
+                  class="max-w-full rounded border border-border object-contain shadow-sm"
+                  style="max-height: calc(100% - 2.5rem)"
+                />
+              {:else if cellPreviewType === 'pdf'}
+                <div class="flex flex-col items-center gap-3 rounded-xl border border-border bg-muted/30 px-6 py-8 text-center">
+                  <svg class="size-10 text-muted-foreground/60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <path d="M9 13h1.5a1.5 1.5 0 0 1 0 3H9v-3z"/>
+                    <path d="M13 13h2v1.5h-2V13z"/>
+                    <path d="M16 13v3"/>
+                  </svg>
+                  <p class="text-ui-sm font-medium text-foreground">PDF Document</p>
+                  <p class="text-ui-xs text-muted-foreground">Opens in your system PDF viewer</p>
+                </div>
+              {/if}
+              <button
+                type="button"
+                class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                onclick={openPreviewExternal}
+              >
+                <ExternalLink class="size-3" />
+                Open in browser
+              </button>
+            </div>
+          {:else}
+            <ShikiBlock
+              code={displayCode}
+              lang={shikiLang}
+              jsonInteractive={viewMode === 'json'}
+            />
+          {/if}
         </div>
       </Tabs.Root>
     </aside>

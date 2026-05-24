@@ -44,7 +44,9 @@
     parseCellInput,
     valueToEditString,
   } from '$lib/cell-value.js'
-  import { cellLinkHref } from '$lib/cell-display.js'
+  import { cellLinkHref, cellUrlType } from '$lib/cell-display.js'
+  import UrlPreviewTooltip from './UrlPreviewTooltip.svelte'
+  import MediaLightbox from './MediaLightbox.svelte'
 
   let {
     columns = [],
@@ -78,6 +80,8 @@
     showRowExpand = true,
     /** Persist column widths per table, e.g. "public.users" */
     columnWidthsKey = undefined,
+    /** Set of column names to hide. Controlled externally (toolbar). */
+    hiddenColumns = /** @type {Set<string>} */ (new Set()),
   } = $props()
 
   /** @type {HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null} */
@@ -95,6 +99,67 @@
   /** @type {string | null} */
   let resizingColName = $state(null)
   let resizeStartWidth = 0
+
+  // ── URL preview / lightbox ────────────────────────────────────────────────
+  /** @type {string | null} */
+  let previewUrl = $state(null)
+  /** @type {'image' | 'pdf' | 'link' | null} */
+  let previewType = $state(null)
+  /** @type {DOMRect | null} */
+  let previewAnchorRect = $state(null)
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let previewShowTimer = null
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let previewHideTimer = null
+
+  /** @type {string | null} */
+  let lightboxUrl = $state(null)
+  /** @type {'image' | 'pdf'} */
+  let lightboxType = $state('image')
+
+  /** @param {string} href @param {'image'|'pdf'|'link'} type @param {DOMRect} rect */
+  function showUrlPreview(href, type, rect) {
+    // Cancel any pending hide so moving back onto the cell keeps it open
+    if (previewHideTimer) { clearTimeout(previewHideTimer); previewHideTimer = null }
+    if (previewShowTimer) clearTimeout(previewShowTimer)
+    if (type === 'link') return
+    previewShowTimer = setTimeout(() => {
+      previewUrl = href
+      previewType = type
+      previewAnchorRect = rect
+      previewShowTimer = null
+    }, 350)
+  }
+
+  /** Called when cursor leaves the cell — gives 250ms to move onto the tooltip */
+  function scheduleHidePreview() {
+    if (previewShowTimer) { clearTimeout(previewShowTimer); previewShowTimer = null }
+    if (previewHideTimer) return
+    previewHideTimer = setTimeout(() => {
+      previewUrl = null
+      previewHideTimer = null
+    }, 250)
+  }
+
+  /** Called when cursor enters the tooltip — cancels the pending hide */
+  function cancelHidePreview() {
+    if (previewHideTimer) { clearTimeout(previewHideTimer); previewHideTimer = null }
+  }
+
+  async function openExternal(/** @type {string} */ url) {
+    try {
+      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+      if (isTauri) {
+        const { openUrl: open } = await import('@tauri-apps/plugin-opener')
+        await open(url)
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+    } catch (err) {
+      const { toast } = await import('svelte-sonner')
+      toast.error(`Could not open URL: ${String(err)}`)
+    }
+  }
 
   function canEditColumn(colIdx) {
     const col = columns[colIdx]
@@ -357,7 +422,8 @@
   }
 
   const gutterColCount = $derived((showRowExpand ? 1 : 0) + (showSelection ? 1 : 0))
-  const tableColSpan = $derived(gutterColCount + columns.length)
+  const visibleColumns = $derived(columns.filter((c) => !hiddenColumns.has(c.name)))
+  const tableColSpan = $derived(gutterColCount + visibleColumns.length)
 
   const allSelected = $derived(rows.length > 0 && selected.size === rows.length)
   const someSelected = $derived(selected.size > 0 && selected.size < rows.length)
@@ -470,7 +536,7 @@
               {#if showSelection}
                 <col style="width: 36px" />
               {/if}
-              {#each columns as col (col.name)}
+              {#each visibleColumns as col (col.name)}
                 <col style="width: {widthForColumn(col.name, col.dataType ?? col.data_type ?? '')}px" />
               {/each}
             </colgroup>
@@ -488,16 +554,16 @@
                     />
                   </th>
                 {/if}
-                {#each columns as col (col.name)}
+                {#each visibleColumns as col (col.name)}
                   {@const colW = widthForColumn(col.name, col.dataType ?? col.data_type ?? '')}
                   <th
                     class={cn(
-                      'relative overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal',
+                      'group/th relative overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal',
                       resizingColName === col.name && 'bg-accent/30',
                     )}
                     style="width: {colW}px; min-width: {colW}px; max-width: {colW}px"
                   >
-                    <div class="flex min-w-0 items-start gap-2">
+                    <div class="flex min-w-0 items-start gap-1.5">
                       <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span
                           class="block truncate font-mono text-ui-sm text-foreground"
@@ -572,6 +638,8 @@
                       </td>
                     {/if}
                     {#each row as cell, colIdx}
+                      {#if hiddenColumns.has(columns[colIdx]?.name)}<!-- skip hidden -->
+                      {:else}
                       {@const isEditing =
                         editingCell?.rowIdx === idx && editingCell?.colIdx === colIdx}
                       {@const col = columns[colIdx]}
@@ -678,6 +746,7 @@
                         {:else}
                           {@const cellText = formatCell(cell)}
                           {@const cellHref = !cellFk ? cellLinkHref(cellText) : null}
+                          {@const urlType = cellUrlType(cellHref)}
                           <span
                             class={cn(
                               'flex items-center gap-1.5 truncate',
@@ -692,8 +761,23 @@
                                 href={cellHref}
                                 data-cell-url
                                 tabindex={-1}
-                                class="truncate"
-                                onclick={(e) => e.stopPropagation()}
+                                class={cn('truncate', urlType === 'image' && 'cursor-zoom-in')}
+                                onclick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                                    void openExternal(cellHref)
+                                  } else if (urlType === 'image' || urlType === 'pdf') {
+                                    lightboxUrl = cellHref
+                                    lightboxType = /** @type {'image'|'pdf'} */ (urlType)
+                                  } else {
+                                    void openExternal(cellHref)
+                                  }
+                                }}
+                                onmouseenter={(e) => {
+                                  if (urlType) showUrlPreview(cellHref, urlType, e.currentTarget.getBoundingClientRect())
+                                }}
+                                onmouseleave={scheduleHidePreview}
                               >
                                 {cellText}
                               </a>
@@ -709,6 +793,7 @@
                           </span>
                         {/if}
                       </td>
+                      {/if}
                     {/each}
                   </tr>
                   {#if showRowExpand && isRowExpanded(idx)}
@@ -819,3 +904,27 @@
     </ContextMenu.Content>
   </ContextMenu.Root>
 {/if}
+
+{#if previewUrl && previewType && previewAnchorRect}
+  <UrlPreviewTooltip
+    url={previewUrl}
+    type={previewType}
+    anchorRect={previewAnchorRect}
+    onmouseenter={cancelHidePreview}
+    onmouseleave={scheduleHidePreview}
+    onopen={() => void openExternal(previewUrl)}
+    onexpand={() => {
+      if (previewType === 'image' || previewType === 'pdf') {
+        lightboxUrl = previewUrl
+        lightboxType = /** @type {'image'|'pdf'} */ (previewType)
+        previewUrl = null
+      }
+    }}
+  />
+{/if}
+
+<MediaLightbox
+  url={lightboxUrl}
+  type={lightboxType}
+  onclose={() => { lightboxUrl = null }}
+/>
