@@ -4,12 +4,17 @@ pub mod tools;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use crate::db::ActiveConnection;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
+
+/// Port we always try first — stable so AI clients don't need reconfiguration.
+const PREFERRED_PORT: u16 = 39847;
 
 pub struct McpState {
     pub conn: Arc<Mutex<Option<ActiveConnection>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// Actual bound port (0 = not yet started).
     pub port: Mutex<u16>,
+    /// Persistent token — loaded from disk once in `init_token`, never regenerated.
     token: Mutex<String>,
 }
 
@@ -22,6 +27,42 @@ impl McpState {
             token: Mutex::new(String::new()),
         }
     }
+
+    /// Called once from `setup()` — loads or generates a stable token from disk.
+    pub fn init_token(&self, app: &AppHandle) {
+        let mut tok = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        if !tok.is_empty() {
+            return;
+        }
+        *tok = load_or_persist_token(app);
+    }
+}
+
+/// Load token from `{app_data_dir}/mcp-token.txt` or generate + save a new one.
+fn load_or_persist_token(app: &AppHandle) -> String {
+    let path = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("mcp-token.txt"));
+
+    if let Some(ref p) = path {
+        if let Ok(raw) = std::fs::read_to_string(p) {
+            let t = raw.trim().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
+    }
+
+    let tok = generate_token();
+    if let Some(p) = path {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&p, &tok);
+    }
+    tok
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -34,6 +75,7 @@ pub struct McpStatus {
 
 #[tauri::command]
 pub async fn mcp_start(mcp: State<'_, McpState>) -> Result<McpStatus, String> {
+    // Already running — return current status.
     {
         let running = mcp.shutdown_tx.lock().map_err(|e| e.to_string())?.is_some();
         if running {
@@ -48,8 +90,14 @@ pub async fn mcp_start(mcp: State<'_, McpState>) -> Result<McpStatus, String> {
         }
     }
 
-    let port = find_free_port(39847).await?;
-    let token = generate_token();
+    // Always try the preferred port first — fall back only if it's taken by another process.
+    let preferred = {
+        let p = *mcp.port.lock().map_err(|e| e.to_string())?;
+        if p > 0 { p } else { PREFERRED_PORT }
+    };
+    let port = find_free_port(preferred).await?;
+    let token = mcp.token.lock().map_err(|e| e.to_string())?.clone();
+
     let conn = Arc::clone(&mcp.conn);
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let token_clone = token.clone();
@@ -58,7 +106,6 @@ pub async fn mcp_start(mcp: State<'_, McpState>) -> Result<McpStatus, String> {
     });
 
     *mcp.port.lock().map_err(|e| e.to_string())? = port;
-    *mcp.token.lock().map_err(|e| e.to_string())? = token.clone();
     *mcp.shutdown_tx.lock().map_err(|e| e.to_string())? = Some(shutdown_tx);
 
     Ok(McpStatus {
@@ -74,30 +121,27 @@ pub async fn mcp_stop(mcp: State<'_, McpState>) -> Result<(), String> {
     if let Some(tx) = mcp.shutdown_tx.lock().map_err(|e| e.to_string())?.take() {
         let _ = tx.send(());
     }
-    *mcp.port.lock().map_err(|e| e.to_string())? = 0;
-    *mcp.token.lock().map_err(|e| e.to_string())? = String::new();
+    // Intentionally keep port and token stable — AI clients stay configured.
     Ok(())
 }
 
 #[tauri::command]
 pub fn mcp_status(mcp: State<'_, McpState>) -> Result<McpStatus, String> {
     let running = mcp.shutdown_tx.lock().map_err(|e| e.to_string())?.is_some();
-    let port = *mcp.port.lock().map_err(|e| e.to_string())?;
+    let raw_port = *mcp.port.lock().map_err(|e| e.to_string())?;
+    // Return PREFERRED_PORT when not yet started so install links are valid immediately.
+    let port = if raw_port > 0 { raw_port } else { PREFERRED_PORT };
     let token = mcp.token.lock().map_err(|e| e.to_string())?.clone();
     Ok(McpStatus {
         running,
         port,
-        url: if running {
-            format!("http://127.0.0.1:{port}")
-        } else {
-            String::new()
-        },
+        url: format!("http://127.0.0.1:{port}"),
         token,
     })
 }
 
-async fn find_free_port(start: u16) -> Result<u16, String> {
-    for port in start..start + 20 {
+async fn find_free_port(preferred: u16) -> Result<u16, String> {
+    for port in preferred..preferred + 20 {
         if tokio::net::TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
             .is_ok()
@@ -105,7 +149,7 @@ async fn find_free_port(start: u16) -> Result<u16, String> {
             return Ok(port);
         }
     }
-    Err(format!("No free port in range {start}–{}", start + 20))
+    Err(format!("No free port found starting at {preferred}"))
 }
 
 fn generate_token() -> String {

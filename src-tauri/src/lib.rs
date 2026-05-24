@@ -5,6 +5,7 @@ mod mcp;
 use db::{ActiveConnection, DbState};
 use mcp::McpState;
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +21,9 @@ pub fn run() {
         .manage(db_state)
         .manage(mcp_state)
         .setup(|app| {
+            // Load or generate a stable MCP token from the app data directory.
+            app.state::<McpState>().init_token(app.handle());
+
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
