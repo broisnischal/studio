@@ -1,7 +1,6 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
-  import Server from '@lucide/svelte/icons/server'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { toast } from 'svelte-sonner'
   import Sidebar from './Sidebar.svelte'
@@ -1130,8 +1129,11 @@
     }
     await refreshQueryStores()
     try {
-      const s = await mcpStart()
-      mcpRunning = s.running
+      const { loadSettings } = await import('$lib/stores/settings.js')
+      if (loadSettings().mcpAutoStart) {
+        const s = await mcpStart()
+        mcpRunning = s.running
+      }
     } catch { /* ignore */ }
   }
 
@@ -1444,7 +1446,7 @@
 
 <McpPanel bind:open={showMcpPanel} connected={!!connection} />
 
-<SettingsDialog bind:open={showSettingsModal} />
+<SettingsDialog bind:open={showSettingsModal} onopenmcp={() => (showMcpPanel = true)} />
 
 <KeyboardShortcutsDialog bind:open={showShortcutsModal} />
 
@@ -1491,17 +1493,6 @@
   </div>
 {/if}
 
-{#if connection}
-  <button
-    type="button"
-    class="fixed bottom-4 left-4 z-30 flex items-center gap-1.5 rounded-full border border-border bg-panel px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
-    onclick={() => (showMcpPanel = true)}
-    title="MCP Server"
-  >
-    <Server class="size-3" />
-    MCP {mcpRunning ? '●' : '○'}
-  </button>
-{/if}
 
 <div class="flex h-full min-h-0 w-full overflow-hidden bg-background">
   {#if sidebarOpen}

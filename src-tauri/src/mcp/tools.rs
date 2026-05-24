@@ -49,6 +49,27 @@ pub fn tool_list() -> Value {
                     "schema": { "type": "string", "description": "Schema to search (default: public)" }
                 }
             }
+        },
+        {
+            "name": "explain_query",
+            "description": "Analyze a SQL query's execution plan. Returns the query plan with estimated costs, scan types, and join strategies. Essential for diagnosing slow queries and understanding index usage.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sql": { "type": "string", "description": "SQL query to explain (does NOT execute the query)" }
+                },
+                "required": ["sql"]
+            }
+        },
+        {
+            "name": "get_database_stats",
+            "description": "Get database health metrics: table sizes, row counts, dead tuple counts (bloat), cache hit rates, and active connections. Essential for performance analysis and capacity planning.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "schema": { "type": "string", "description": "Schema name (default: public)" }
+                }
+            }
         }
     ])
 }
@@ -78,6 +99,14 @@ pub async fn call_tool(
         "check_migrations" => {
             let schema = args["schema"].as_str().unwrap_or("public");
             check_migrations(conn, schema).await
+        }
+        "explain_query" => {
+            let sql = args["sql"].as_str().ok_or("Missing sql argument")?;
+            explain_query(conn, sql).await
+        }
+        "get_database_stats" => {
+            let schema = args["schema"].as_str().unwrap_or("public");
+            get_database_stats(conn, schema).await
         }
         _ => Err(format!("Unknown tool: {name}")),
     }
@@ -635,6 +664,227 @@ async fn check_migrations_d1(cfg: &crate::db::D1Config) -> Result<String, String
         results.push(json!({ "table": tbl, "framework": framework, "found": found }));
     }
     Ok(json!({ "migration_tables": results }).to_string())
+}
+
+// ── explain_query ─────────────────────────────────────────────────────────────
+
+async fn explain_query(conn: &ActiveConnection, sql: &str) -> Result<String, String> {
+    match conn {
+        ActiveConnection::Postgres(pool) => explain_query_pg(pool, sql).await,
+        ActiveConnection::Sqlite(pool) => explain_query_sqlite(pool, sql).await,
+        ActiveConnection::D1(cfg) => explain_query_d1(cfg, sql).await,
+    }
+}
+
+async fn explain_query_pg(pool: &sqlx::PgPool, sql: &str) -> Result<String, String> {
+    let rows = sqlx::query(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("EXPLAIN failed: {e}"))?;
+
+    let plan_text: String = rows
+        .first()
+        .and_then(|r| r.try_get::<String, _>(0).ok())
+        .unwrap_or_default();
+    let plan: Value = serde_json::from_str(&plan_text).unwrap_or(json!(plan_text));
+
+    Ok(json!({ "plan": plan, "database": "postgres" }).to_string())
+}
+
+async fn explain_query_sqlite(pool: &sqlx::SqlitePool, sql: &str) -> Result<String, String> {
+    let rows = sqlx::query(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("EXPLAIN failed: {e}"))?;
+
+    let steps: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<i64,_>(0).unwrap_or(0),
+                "parent": r.try_get::<i64,_>(1).unwrap_or(0),
+                "detail": r.try_get::<String,_>(3).unwrap_or_default()
+            })
+        })
+        .collect();
+
+    Ok(json!({ "query_plan": steps, "database": "sqlite" }).to_string())
+}
+
+async fn explain_query_d1(cfg: &crate::db::D1Config, sql: &str) -> Result<String, String> {
+    let result =
+        crate::db::d1::query(cfg, &format!("EXPLAIN QUERY PLAN {sql}"), vec![]).await?;
+    Ok(json!({ "query_plan": result.rows, "database": "d1" }).to_string())
+}
+
+// ── get_database_stats ────────────────────────────────────────────────────────
+
+async fn get_database_stats(conn: &ActiveConnection, schema: &str) -> Result<String, String> {
+    match conn {
+        ActiveConnection::Postgres(pool) => get_database_stats_pg(pool, schema).await,
+        ActiveConnection::Sqlite(pool) => get_database_stats_sqlite(pool).await,
+        ActiveConnection::D1(cfg) => get_database_stats_d1(cfg).await,
+    }
+}
+
+fn fmt_bytes(bytes: i64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1_048_576 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1_073_741_824 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+    }
+}
+
+async fn get_database_stats_pg(pool: &sqlx::PgPool, schema: &str) -> Result<String, String> {
+    let table_rows = sqlx::query(
+        r#"
+        SELECT
+            t.relname,
+            pg_total_relation_size(t.oid),
+            pg_relation_size(t.oid),
+            pg_indexes_size(t.oid),
+            COALESCE(s.n_live_tup, 0),
+            COALESCE(s.n_dead_tup, 0),
+            CASE WHEN (COALESCE(s.heap_blks_hit,0) + COALESCE(s.heap_blks_read,0)) > 0
+                 THEN ROUND(100.0 * s.heap_blks_hit / (s.heap_blks_hit + s.heap_blks_read), 1)
+                 ELSE NULL END
+        FROM pg_class t
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        LEFT JOIN pg_stat_user_tables s ON s.relid = t.oid
+        WHERE n.nspname = $1 AND t.relkind = 'r'
+        ORDER BY pg_total_relation_size(t.oid) DESC
+        LIMIT 30
+        "#,
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Stats query failed: {e}"))?;
+
+    let tables: Vec<Value> = table_rows
+        .iter()
+        .map(|r| {
+            let total: i64 = r.try_get(1).unwrap_or(0);
+            let tbl: i64 = r.try_get(2).unwrap_or(0);
+            let idx: i64 = r.try_get(3).unwrap_or(0);
+            let live: i64 = r.try_get(4).unwrap_or(0);
+            let dead: i64 = r.try_get(5).unwrap_or(0);
+            let cache: Option<f64> = r.try_get(6).ok().flatten();
+            json!({
+                "table": r.try_get::<String,_>(0).unwrap_or_default(),
+                "total_size": fmt_bytes(total),
+                "table_size": fmt_bytes(tbl),
+                "index_size": fmt_bytes(idx),
+                "live_rows": live,
+                "dead_rows": dead,
+                "cache_hit_pct": cache,
+                "bloat_pct": if live > 0 {
+                    json!((dead as f64 / (live + dead) as f64 * 100.0).round())
+                } else { json!(null) }
+            })
+        })
+        .collect();
+
+    let conn_rows = sqlx::query(
+        r#"SELECT COALESCE(state,'idle'), count(*)::bigint FROM pg_stat_activity
+           WHERE datname = current_database() GROUP BY state"#,
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let connections: Vec<Value> = conn_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "state": r.try_get::<String,_>(0).unwrap_or_default(),
+                "count": r.try_get::<i64,_>(1).unwrap_or(0)
+            })
+        })
+        .collect();
+
+    let db_stats = sqlx::query(
+        r#"SELECT blks_hit, blks_read, xact_commit, xact_rollback
+           FROM pg_stat_database WHERE datname = current_database()"#,
+    )
+    .fetch_one(pool)
+    .await
+    .ok();
+
+    let database = db_stats.map(|r| {
+        let hit: i64 = r.try_get(0).unwrap_or(0);
+        let read: i64 = r.try_get(1).unwrap_or(0);
+        let commits: i64 = r.try_get(2).unwrap_or(0);
+        let rollbacks: i64 = r.try_get(3).unwrap_or(0);
+        let total = hit + read;
+        json!({
+            "cache_hit_pct": if total > 0 { json!((hit as f64 / total as f64 * 100.0).round()) } else { json!(null) },
+            "transactions_committed": commits,
+            "transactions_rolled_back": rollbacks,
+        })
+    });
+
+    Ok(json!({
+        "schema": schema,
+        "tables": tables,
+        "connections": connections,
+        "database": database,
+    })
+    .to_string())
+}
+
+async fn get_database_stats_sqlite(pool: &sqlx::SqlitePool) -> Result<String, String> {
+    let page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(4096);
+    let freelist: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+    let table_names: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+    let mut tables = Vec::new();
+    for name in &table_names {
+        let count: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM \"{name}\""))
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+        tables.push(json!({ "table": name, "row_count": count }));
+    }
+
+    Ok(json!({
+        "database_size": fmt_bytes(page_count * page_size),
+        "free_space": fmt_bytes(freelist * page_size),
+        "page_count": page_count,
+        "page_size": page_size,
+        "tables": tables,
+    })
+    .to_string())
+}
+
+async fn get_database_stats_d1(cfg: &crate::db::D1Config) -> Result<String, String> {
+    let result = crate::db::d1::query(
+        cfg,
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        vec![],
+    )
+    .await?;
+    Ok(json!({ "tables": result.rows }).to_string())
 }
 
 // ── Postgres cell → JSON ──────────────────────────────────────────────────────

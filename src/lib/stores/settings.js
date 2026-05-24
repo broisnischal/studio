@@ -3,7 +3,7 @@ import { setMode } from 'mode-watcher'
 const STORAGE_KEY = 'db-studio:settings'
 
 /** @typedef {'light' | 'dark'} Theme */
-/** @typedef {{ theme: Theme, zoom: number }} AppSettings */
+/** @typedef {{ theme: Theme, zoom: number, mcpAutoStart: boolean }} AppSettings */
 
 /** UI zoom scale (font + layout). 1 = 100%. */
 export const ZOOM_STEPS = [0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.25, 1.5]
@@ -13,6 +13,7 @@ const DEFAULT_ZOOM = 1
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
   zoom: DEFAULT_ZOOM,
+  mcpAutoStart: false,
 }
 
 /** @returns {AppSettings} */
@@ -35,7 +36,8 @@ export function loadSettings() {
         Math.abs(step - zoom) < Math.abs(prev - zoom) ? step : prev,
       )
     }
-    return { theme, zoom }
+    const mcpAutoStart = parsed.mcpAutoStart === true
+    return { theme, zoom, mcpAutoStart }
   } catch {
     return { ...DEFAULT_SETTINGS }
   }
