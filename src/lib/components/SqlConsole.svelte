@@ -8,7 +8,9 @@
   import Loader2 from "@lucide/svelte/icons/loader-2";
   import History from "@lucide/svelte/icons/history";
   import Bookmark from "@lucide/svelte/icons/bookmark";
+  import Code2 from "@lucide/svelte/icons/code-2";
   import SqlEditor from "./SqlEditor.svelte";
+  import { sqlToDrizzle, sqlToPrisma } from "$lib/orm-builder.js";
   import QueryHistoryPanel from "./QueryHistoryPanel.svelte";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -109,9 +111,32 @@
         ? buildSystemPrompt(schemaContext)
         : 'You are an expert SQL assistant. Fix the SQL error provided. Return the corrected SQL in a ```sql code block.'
 
+      // Build an explicit schema section so the AI sees exact column names/casing
+      // even if the table hasn't been browsed yet.
+      let schemaSection = ''
+      if (schemaContext) {
+        /** @param {{ name: string, dataType: string, nullable?: boolean }} c */
+        const colLine = (c) => `  ${c.name}  ${c.dataType}${c.nullable === false ? '  NOT NULL' : ''}`
+        const blocks = []
+        const activeKey = schemaContext.activeTable
+          ? `${schemaContext.activeSchema}.${schemaContext.activeTable}`
+          : null
+        if (schemaContext.activeTable && schemaContext.columns.length) {
+          blocks.push(`${activeKey}:\n${schemaContext.columns.map(colLine).join('\n')}`)
+        }
+        for (const [key, cols] of Object.entries(schemaContext.allTableColumns ?? {})) {
+          if (key === activeKey) continue
+          blocks.push(`${key}:\n${cols.map(colLine).join('\n')}`)
+        }
+        if (blocks.length) {
+          schemaSection = `\n\nDatabase schema (use column names EXACTLY as shown — casing matters in quoted identifiers):\n${blocks.join('\n\n')}`
+        }
+      }
+
       const userMsg =
-        `Fix this SQL error.\n\nError:\n${error}\n\nSQL:\n\`\`\`sql\n${sql.trim()}\n\`\`\`\n\n` +
-        `Return the corrected SQL in a \`\`\`sql code block and give a brief one-sentence explanation of what was wrong.`
+        `Fix this SQL error.${schemaSection}\n\nError:\n${error}\n\nSQL:\n\`\`\`sql\n${sql.trim()}\n\`\`\`\n\n` +
+        `Return the corrected SQL in a \`\`\`sql code block and a brief one-sentence explanation. ` +
+        `Use column names exactly as shown in the schema above — do NOT normalize casing or guess column names.`
 
       let fullContent = ''
 
@@ -172,6 +197,28 @@
   function openSaveDialog() {
     saveQueryName = queryTitle(sql);
     saveDialogOpen = true;
+  }
+
+  let ormCopied = $state(/** @type {'drizzle' | 'prisma' | null} */ (null))
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let ormCopiedTimer = null
+
+  function copyAsDrizzle() {
+    const drizzle = sqlToDrizzle(sql)
+    navigator.clipboard.writeText(drizzle).then(() => {
+      ormCopied = 'drizzle'
+      if (ormCopiedTimer) clearTimeout(ormCopiedTimer)
+      ormCopiedTimer = setTimeout(() => { ormCopied = null }, 2000)
+    })
+  }
+
+  function copyAsPrisma() {
+    const prisma = sqlToPrisma(sql, [])
+    navigator.clipboard.writeText(prisma).then(() => {
+      ormCopied = 'prisma'
+      if (ormCopiedTimer) clearTimeout(ormCopiedTimer)
+      ormCopiedTimer = setTimeout(() => { ormCopied = null }, 2000)
+    })
   }
 
   async function confirmSaveQuery() {
@@ -264,6 +311,41 @@
       >
         <Bookmark class="size-3.5 shrink-0" />
         <span class="text-ui-xs">Save</span>
+      </Button>
+
+      <div class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></div>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+        disabled={!sql.trim()}
+        title="Copy SQL as Drizzle ORM query"
+        onclick={copyAsDrizzle}
+      >
+        {#if ormCopied === 'drizzle'}
+          <CheckCheck class="size-3.5 shrink-0 text-green-500" />
+        {:else}
+          <Code2 class="size-3.5 shrink-0" />
+        {/if}
+        <span class="text-ui-xs">{ormCopied === 'drizzle' ? 'Copied!' : 'Drizzle'}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+        disabled={!sql.trim()}
+        title="Copy SQL as Prisma query"
+        onclick={copyAsPrisma}
+      >
+        {#if ormCopied === 'prisma'}
+          <CheckCheck class="size-3.5 shrink-0 text-green-500" />
+        {:else}
+          <Code2 class="size-3.5 shrink-0" />
+        {/if}
+        <span class="text-ui-xs">{ormCopied === 'prisma' ? 'Copied!' : 'Prisma'}</span>
       </Button>
     </div>
 
@@ -391,7 +473,7 @@
     }}
   />
 
-  <div class="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+  <div class="flex min-h-0 flex-1 flex-col overflow-hidden bg-panel">
     {#if columns.length > 0}
       <DataTable {columns} {rows} {loading} bind:selected />
     {:else if loading}

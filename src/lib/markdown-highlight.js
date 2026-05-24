@@ -1,4 +1,4 @@
-/** @typedef {'light' | 'dark'} ThemeId */
+/** @typedef {import('$lib/themes/registry.js').ThemeId} ThemeId */
 
 import { highlightCode, resolveShikiLang } from '$lib/shiki-highlighter.js'
 

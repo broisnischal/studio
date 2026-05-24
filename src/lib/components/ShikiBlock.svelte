@@ -2,7 +2,7 @@
   import { tick } from 'svelte'
   import { highlightCode } from '$lib/shiki-highlighter.js'
   import { cn } from '$lib/utils.js'
-  import { mode } from 'mode-watcher'
+  import { appThemeId } from '$lib/stores/settings.js'
   import {
     getJsonValueRangeAtOffset,
     getTextOffsetInRoot,
@@ -34,7 +34,7 @@
     setTimeout(() => { copied = false }, 1500)
   }
 
-  const appTheme = $derived(mode.current === 'light' ? 'light' : 'dark')
+  const appTheme = $derived($appThemeId)
   const isJsonInteractive = $derived(jsonInteractive && lang === 'json')
 
   $effect(() => {

@@ -1,9 +1,16 @@
+import { writable } from 'svelte/store'
 import { setMode } from 'mode-watcher'
+import {
+  DEFAULT_THEME_ID,
+  isDarkTheme,
+  nextThemeId,
+  normalizeThemeId,
+} from '$lib/themes/registry.js'
 
 const STORAGE_KEY = 'db-studio:settings'
 
-/** @typedef {'light' | 'dark'} Theme */
-/** @typedef {{ theme: Theme, zoom: number, mcpAutoStart: boolean }} AppSettings */
+/** @typedef {import('$lib/themes/registry.js').ThemeId} ThemeId */
+/** @typedef {{ theme: ThemeId, zoom: number, mcpAutoStart: boolean }} AppSettings */
 
 /** UI zoom scale (font + layout). 1 = 100%. */
 export const ZOOM_STEPS = [0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.25, 1.5]
@@ -11,9 +18,23 @@ const DEFAULT_ZOOM = 1
 
 /** @type {AppSettings} */
 export const DEFAULT_SETTINGS = {
-  theme: 'dark',
+  theme: DEFAULT_THEME_ID,
   zoom: DEFAULT_ZOOM,
   mcpAutoStart: false,
+}
+
+/** Reactive app theme id (synced by applySettings). */
+export const appThemeId = writable(/** @type {ThemeId} */ (DEFAULT_THEME_ID))
+
+/** @type {ThemeId[]} */
+let themeHistoryStack = []
+let restoringTheme = false
+
+/** @param {ThemeId} theme */
+function recordThemeBeforeChange(theme) {
+  const top = themeHistoryStack[themeHistoryStack.length - 1]
+  if (top !== theme) themeHistoryStack.push(theme)
+  if (themeHistoryStack.length > 32) themeHistoryStack.shift()
 }
 
 /** @returns {AppSettings} */
@@ -22,7 +43,7 @@ export function loadSettings() {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return { ...DEFAULT_SETTINGS }
     const parsed = JSON.parse(raw)
-    const theme = parsed.theme === 'light' ? 'light' : 'dark'
+    const theme = normalizeThemeId(parsed.theme)
     let zoom = DEFAULT_ZOOM
     if (parsed.zoom != null) {
       zoom = Number(parsed.zoom)
@@ -51,10 +72,14 @@ export function saveSettings(settings) {
 /** @param {AppSettings} settings */
 export function applySettings(settings) {
   const root = document.documentElement
+  const theme = normalizeThemeId(settings.theme)
   const zoom = settings.zoom
-  const isDark = settings.theme === 'dark'
-  root.classList.toggle('dark', isDark)
-  setMode(isDark ? 'dark' : 'light')
+  const dark = isDarkTheme(theme)
+
+  root.setAttribute('data-theme', theme)
+  root.classList.toggle('dark', dark)
+  setMode(dark ? 'dark' : 'light')
+  appThemeId.set(theme)
   root.style.setProperty('--app-zoom', String(zoom))
   root.style.setProperty('--app-font-size', `${Math.round(13 * zoom)}px`)
 }
@@ -95,11 +120,6 @@ function handleZoomKeydown(e) {
     return
   }
 
-  if (key === 'm' || key === 'M' || code === 'KeyM') {
-    e.preventDefault()
-    e.stopPropagation()
-    toggleTheme()
-  }
 }
 
 /** Block Tauri webview zoom (Ctrl/Cmd + wheel) when hotkeys are enabled in the shell. */
@@ -120,7 +140,17 @@ export function installZoomShortcuts() {
 
 /** @param {Partial<AppSettings>} patch */
 export function updateSettings(patch) {
-  const next = { ...loadSettings(), ...patch }
+  const current = loadSettings()
+  const next = { ...current, ...patch }
+
+  if (
+    !restoringTheme &&
+    patch.theme != null &&
+    patch.theme !== current.theme
+  ) {
+    recordThemeBeforeChange(current.theme)
+  }
+
   saveSettings(next)
   applySettings(next)
   return next
@@ -148,10 +178,23 @@ export function resetZoom() {
   return updateSettings({ zoom: DEFAULT_ZOOM })
 }
 
-export function toggleTheme() {
+export function cycleTheme() {
   const current = loadSettings()
-  const theme = current.theme === 'dark' ? 'light' : 'dark'
-  return updateSettings({ theme })
+  return updateSettings({ theme: nextThemeId(current.theme) })
+}
+
+/** Revert to the theme used before the most recent change (⌘/Ctrl+Shift+M). */
+export function restorePreviousTheme() {
+  const current = loadSettings()
+  const prev = themeHistoryStack.pop()
+  if (!prev || prev === current.theme) return current
+
+  restoringTheme = true
+  try {
+    return updateSettings({ theme: prev })
+  } finally {
+    restoringTheme = false
+  }
 }
 
 export function canIncreaseZoom(zoom) {

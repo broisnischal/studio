@@ -4,11 +4,13 @@
   import { configureMonacoWorkers } from '$lib/monaco-env.js'
   import { registerMonacoSqlFormatter } from '$lib/format-sql.js'
   import { registerMonacoSqlCompletion } from '$lib/monaco-sql-complete.js'
+  import { registerMonacoAiCompletion } from '$lib/monaco-ai-complete.js'
   import {
     defineDbStudioMonacoThemes,
     monacoThemeId,
     readEditorFontOptions,
   } from '$lib/monaco-themes.js'
+  import { normalizeThemeId } from '$lib/themes/registry.js'
   import { cn } from '$lib/utils.js'
 
   /** @typedef {import('$lib/monaco-sql-complete.js').SqlSchemaHints} SqlSchemaHints */
@@ -30,9 +32,9 @@
   /** @type {monaco.editor.IStandaloneCodeEditor | null} */
   let editor = null
 
-  /** Reads current theme from the <html> .dark class — the authoritative source. */
+  /** Reads current app theme from <html data-theme>. */
   function currentTheme() {
-    return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+    return normalizeThemeId(document.documentElement.dataset.theme)
   }
 
   /** @param {monaco.editor.IStandaloneCodeEditor} ed */
@@ -63,6 +65,7 @@
     defineDbStudioMonacoThemes()
     registerMonacoSqlFormatter(monaco)
     registerMonacoSqlCompletion(monaco, () => schemaHints)
+    registerMonacoAiCompletion(monaco, () => schemaHints)
     if (!container) return
 
     const { fontSize, lineHeight } = readEditorFontOptions()
@@ -102,6 +105,7 @@
       snippetSuggestions: 'inline',
       renderWhitespace: 'none',
       bracketPairColorization: { enabled: true },
+      inlineSuggest: { enabled: true, mode: 'subword' },
     })
 
     registerAppShortcuts(editor)
@@ -117,7 +121,7 @@
     })
     themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class'],
+      attributeFilter: ['class', 'data-theme'],
     })
 
     return () => {

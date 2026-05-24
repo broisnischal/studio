@@ -1,11 +1,20 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en" class="h-full" style="opacity:0;transition:opacity 200ms ease">
   <head>
     <script>
       try {
         const raw = localStorage.getItem('db-studio:settings')
         const parsed = raw ? JSON.parse(raw) : null
-        const theme = parsed?.theme
+        const valid = [
+          'light', 'notion', 'github-light', 'vscode-light', 'linear-light',
+          'linear', 'cursor', 'raycast', 'vercel',
+          'vscode', 'github', 'onedark', 'catppuccin', 'rosepine',
+          'dark', 'vitesse', 'midnight', 'slate',
+          'nord', 'dracula', 'forest', 'solarized',
+        ]
+        let theme = parsed?.theme
+        if (!valid.includes(theme)) theme = theme === 'light' ? 'light' : 'dark'
+        document.documentElement.dataset.theme = theme
         if (theme !== 'light') document.documentElement.classList.add('dark')
         let zoom = 1
         if (parsed?.zoom != null) zoom = Number(parsed.zoom)
@@ -17,6 +26,7 @@
           root.style.setProperty('--app-font-size', fontPx + 'px')
         }
       } catch (_) {
+        document.documentElement.dataset.theme = 'dark'
         document.documentElement.classList.add('dark')
       }
       ;(function () {

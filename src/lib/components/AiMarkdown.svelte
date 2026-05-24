@@ -1,6 +1,6 @@
 <script>
   import { marked } from 'marked'
-  import { mode } from 'mode-watcher'
+  import { appThemeId } from '$lib/stores/settings.js'
   import { highlightMarkdownHtml } from '$lib/markdown-highlight.js'
   import { cn } from '$lib/utils.js'
 
@@ -47,7 +47,7 @@
   let html = $state('')
   let loading = $state(false)
 
-  const appTheme = $derived(mode.current === 'light' ? 'light' : 'dark')
+  const appTheme = $derived($appThemeId)
 
   $effect(() => {
     const md = content

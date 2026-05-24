@@ -35,6 +35,7 @@ pub fn run() {
             .resizable(true)
             .maximized(true)
             .decorations(false)
+            .visible(false)
             .on_navigation(|url| {
                 let scheme = url.scheme();
                 if matches!(scheme, "tauri" | "ipc") {
@@ -71,6 +72,7 @@ pub fn run() {
             commands::pg_list_schemas,
             commands::pg_list_tables,
             commands::pg_list_indexes,
+            commands::pg_list_enums,
             commands::pg_get_table_rows,
             commands::pg_execute_sql,
             commands::pg_update_table_cell,

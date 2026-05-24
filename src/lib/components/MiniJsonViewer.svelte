@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import Copy from "@lucide/svelte/icons/copy";
   import { toast } from "svelte-sonner";
-  import { mode } from "mode-watcher";
+  import { appThemeId } from "$lib/stores/settings.js";
   import { highlightCode } from "$lib/shiki-highlighter.js";
   import { formatJsonValue } from "$lib/row-inspector.js";
   import { valueForJsonViewer } from "$lib/cell-expand.js";
@@ -22,7 +22,7 @@
   let rootEl = $state(null);
 
   const jsonText = $derived(formatJsonValue(valueForJsonViewer(value)));
-  const appTheme = $derived(mode.current === "light" ? "light" : "dark");
+  const appTheme = $derived($appThemeId);
 
   $effect(() => {
     const source = jsonText;
@@ -75,7 +75,7 @@
 
 <div
   class={cn(
-    "mini-json-viewer group/mini relative w-full min-w-0 max-w-[50vw] overflow-hidden rounded-md border border-border/70 bg-muted/25 shadow-sm",
+    "mini-json-viewer group/mini relative w-full min-w-0 max-w-[50vw] overflow-hidden rounded-md border border-border/70 bg-[var(--editor-surface)] shadow-sm",
     className,
   )}
 >

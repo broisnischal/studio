@@ -4,6 +4,8 @@
   import Terminal from '@lucide/svelte/icons/terminal'
   import FileText from '@lucide/svelte/icons/file-text'
   import Bot from '@lucide/svelte/icons/bot'
+  import LayoutTemplate from '@lucide/svelte/icons/layout-template'
+  import Code2 from '@lucide/svelte/icons/code-2'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
   import { cn } from '$lib/utils.js'
@@ -38,6 +40,8 @@
     if (tab.kind === 'sql') return Terminal
     if (tab.kind === 'table') return Table2
     if (tab.kind === 'ai') return Bot
+    if (tab.kind === 'schema') return LayoutTemplate
+    if (tab.kind === 'orm') return Code2
     return FileText
   }
 </script>

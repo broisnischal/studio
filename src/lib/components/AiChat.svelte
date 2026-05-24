@@ -36,6 +36,7 @@
     buildSystemPrompt,
   } from '$lib/ai.js'
   import { renderMermaidSync, THEMES } from 'beautiful-mermaid'
+  import { mermaidThemeFor, normalizeThemeId } from '$lib/themes/registry.js'
   import { loadAiSettings, saveAiSettings } from '$lib/stores/ai-settings.js'
   import {
     listConversations,
@@ -249,24 +250,13 @@
   // ── Mermaid ───────────────────────────────────────────────────────────────
   /** App :root defines --muted, --accent, --border which inherit into SVG and override
    *  beautiful-mermaid's color-mix fallbacks — ER attributes/lines become illegible. */
-  const MERMAID_THEME = {
-    light: {
-      ...THEMES['zinc-light'],
-      muted: '#71717a',
-      line: '#a1a1aa',
-      accent: '#52525b',
-      border: '#d4d4d8',
-    },
-    dark: {
-      ...THEMES['zinc-dark'],
-      muted: '#a1a1aa',
-      line: '#71717a',
-      accent: '#d4d4d8',
-      border: '#52525b',
-    },
+  /** @param {import('$lib/themes/registry.js').ThemeId} themeId */
+  function resolveMermaidTheme(themeId) {
+    const base = themeId === 'light' ? THEMES['zinc-light'] : THEMES['zinc-dark']
+    return { ...base, ...mermaidThemeFor(themeId) }
   }
 
-  /** @param {SVGSVGElement} svg @param {typeof MERMAID_THEME.light} theme */
+  /** @param {SVGSVGElement} svg @param {ReturnType<typeof resolveMermaidTheme>} theme */
   function applyMermaidThemeVars(svg, theme) {
     svg.style.setProperty('--bg', theme.bg)
     svg.style.setProperty('--fg', theme.fg)
@@ -280,15 +270,17 @@
   const mermaidCache = new Map()
   const MERMAID_CACHE_MAX = 30
 
-  /** Render mermaid code to SVG. Results cached with LRU eviction. */
+  /** Render mermaid code to SVG. Results cached with LRU eviction (per app theme). */
   function processMermaidSvg(code) {
-    if (mermaidCache.has(code)) return /** @type {string} */ (mermaidCache.get(code))
+    const themeId = normalizeThemeId(document.documentElement.dataset.theme)
+    const cacheKey = `${themeId}:${code}`
+    if (mermaidCache.has(cacheKey)) return /** @type {string} */ (mermaidCache.get(cacheKey))
     try {
-      const svg = renderMermaidSync(code, MERMAID_THEME.light)
+      const svg = renderMermaidSync(code, resolveMermaidTheme(themeId))
       if (mermaidCache.size >= MERMAID_CACHE_MAX) {
         mermaidCache.delete(/** @type {string} */ (mermaidCache.keys().next().value))
       }
-      mermaidCache.set(code, svg)
+      mermaidCache.set(cacheKey, svg)
       return svg
     } catch (e) {
       return `<pre class="text-xs text-destructive whitespace-pre-wrap">${String(e)}</pre>`
@@ -304,14 +296,17 @@
 
     // ── Theming ────────────────────────────────────────────────────────────
     function applyTheme() {
-      const dark = document.documentElement.classList.contains('dark')
-      const theme = dark ? MERMAID_THEME.dark : MERMAID_THEME.light
+      const themeId = normalizeThemeId(document.documentElement.dataset.theme)
+      const theme = resolveMermaidTheme(themeId)
       applyMermaidThemeVars(svg, theme)
       node.style.background = theme.bg
     }
     applyTheme()
     const themeObs = new MutationObserver(applyTheme)
-    themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    themeObs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme'],
+    })
 
     // ── Pan / zoom ─────────────────────────────────────────────────────────
     svg.style.transformOrigin = '0 0'
@@ -1510,7 +1505,7 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     overflow-x: auto;
-    background: color-mix(in oklch, var(--muted) 55%, transparent) !important;
+    background: var(--editor-surface) !important;
   }
   :global(.prose-ai pre.shiki code) {
     font-family: ui-monospace, 'Geist Mono', monospace;

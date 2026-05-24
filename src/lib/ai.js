@@ -525,7 +525,7 @@ ${otherTablesSection}
 
 ## Response Rules
 1. **Always use \`execute_sql\` to fetch real data.** Never invent or estimate results.
-2. Before querying an unknown table, call \`describe_table\` to inspect its schema.
+2. **If a table's columns are NOT listed in the schema sections above, call \`describe_table\` BEFORE writing any query against it.** Column names are case-sensitive when quoted — never guess or normalize casing.
 3. After tool results, give a concise human-readable summary (1–3 sentences max).
 4. For destructive SQL (DELETE / DROP / TRUNCATE): explain what will change, then execute. The user will be prompted to confirm before it runs.
 5. If a query returns no rows, say so clearly and suggest alternatives.

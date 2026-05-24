@@ -2,6 +2,7 @@
   import { onMount, onDestroy, untrack } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
+  import { cycleTheme, restorePreviousTheme } from '$lib/stores/settings.js'
   import { toast } from 'svelte-sonner'
   import Sidebar from './Sidebar.svelte'
   import TabBar from './TabBar.svelte'
@@ -18,6 +19,8 @@
   import UpdateDialog from './UpdateDialog.svelte'
   import InsertRowDialog from './InsertRowDialog.svelte'
   import McpPanel from './McpPanel.svelte'
+  import OrmRunner from './OrmRunner.svelte'
+  import SchemaPage from './SchemaPage.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -38,9 +41,13 @@
     createSqlTab,
     createWelcomeTab,
     createAiTab,
+    createSchemaTab,
+    createOrmTab,
     findTableTab,
     findSqlTab,
     findAiTab,
+    findSchemaTab,
+    findOrmTab,
     findLastTableTab,
     tableTabTitle,
     cycleTabIndex,
@@ -73,6 +80,7 @@
     connectSqlite,
     connectD1,
     listIndexes,
+    listEnums,
   } from '$lib/api.js'
   import {
     remapNullableRowIndex,
@@ -123,6 +131,8 @@
   let activeSchema = $state('public')
   let tables = $state([])
   let indexes = $state([])
+  /** @type {{ name: string, values: string[] }[]} */
+  let enums = $state([])
   let activeTable = $state(/** @type {string | null} */ (null))
   let tableFilter = $state('')
   let loadingTables = $state(false)
@@ -180,6 +190,14 @@
   let sqlLoading = $state(false)
   let sqlError = $state('')
 
+  let ormCode = $state('')
+  let ormMode = $state(/** @type {'drizzle' | 'prisma'} */ ('drizzle'))
+  let ormColumns = $state([])
+  let ormRows = $state([])
+  let ormQueryMs = $state(0)
+  let ormLoading = $state(false)
+  let ormError = $state('')
+
   const activeTab = $derived(tabs.find((t) => t.id === activeTabId) ?? null)
 
   const activeView = $derived(activeTab?.kind === 'sql' ? 'sql' : 'table')
@@ -187,6 +205,11 @@
   const sqlSchemaHints = $derived.by(() => {
     /** @type {Record<string, string[]>} */
     const columnsByTable = {}
+    // Include all browsed tables so completion works across the whole schema
+    for (const [key, cols] of tableColumnsCache) {
+      columnsByTable[key] = cols.map((c) => c.name)
+    }
+    // Active table columns always override the cache with the freshest data
     if (activeTable && columns.length) {
       const cols = columns.map((c) => c.name)
       columnsByTable[activeTable] = cols
@@ -419,7 +442,7 @@
 
   /** @param {StudioTab} tab */
   async function applyTabToEditor(tab) {
-    if (tab.kind === 'welcome' || tab.kind === 'ai') {
+    if (tab.kind === 'welcome' || tab.kind === 'ai' || tab.kind === 'schema' || tab.kind === 'orm') {
       clearTableEditor()
       return
     }
@@ -511,6 +534,16 @@
     toggleSidebar()
   })
 
+  createHotkey('Mod+M', (e) => {
+    e.preventDefault()
+    cycleTheme()
+  })
+
+  createHotkey('Mod+Shift+M', (e) => {
+    e.preventDefault()
+    restorePreviousTheme()
+  })
+
   createHotkey('Mod+Shift+D', (e) => {
     if (!connection) return
     e.preventDefault()
@@ -521,6 +554,28 @@
     if (!connection) return
     e.preventDefault()
     void focusSqlView()
+  })
+
+  createHotkey('Mod+Shift+O', (e) => {
+    if (!connection) return
+    e.preventDefault()
+    openOrmTab()
+  })
+
+  createHotkey('Mod+Shift+E', (e) => {
+    if (!connection) return
+    e.preventDefault()
+    openSchemaTab()
+  })
+
+  createHotkey('Mod+Shift+F', (e) => {
+    if (commandOpen || showConnectionModal || showSettingsModal) return
+    e.preventDefault()
+    const el = document.querySelector('[data-sidebar-filter]')
+    if (el instanceof HTMLElement) {
+      if (!sidebarOpen) toggleSidebar()
+      el.focus()
+    }
   })
 
   createHotkey('Escape', (e) => {
@@ -564,6 +619,59 @@
     if (commandOpen || showConnectionModal || showSettingsModal) return
     e.preventDefault()
     void handleModRefresh()
+  })
+
+  // Ctrl+Arrow (Windows/Linux) or Cmd+Arrow (Mac) for pagination.
+  // Uses a raw listener instead of createHotkey because:
+  //   1. macOS intercepts Ctrl+Arrow at the OS level for Mission Control.
+  //   2. Raw listeners read current reactive signal values at call time.
+  $effect(() => {
+    /** @param {KeyboardEvent} e */
+    function onPaginationKey(e) {
+      const mod = e.ctrlKey || e.metaKey
+      if (!mod || e.shiftKey || e.altKey) return
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      if (commandOpen || showConnectionModal || showSettingsModal) return
+      if (activeTab?.kind !== 'table' || !activeTable) return
+      const el = document.activeElement
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) return
+      if (e.key === 'ArrowLeft') {
+        if (page <= 1) return
+        e.preventDefault()
+        void handlePageChange(page - 1)
+      } else {
+        if (page * pageSize >= total) return
+        e.preventDefault()
+        void handlePageChange(page + 1)
+      }
+    }
+    document.addEventListener('keydown', onPaginationKey)
+    return () => document.removeEventListener('keydown', onPaginationKey)
+  })
+
+  // F11 (all platforms) and Cmd+Ctrl+F (macOS standard) for fullscreen toggle.
+  $effect(() => {
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+    if (!isTauri) return
+    /** @param {KeyboardEvent} e */
+    async function onFullscreenKey(e) {
+      const isF11 = e.key === 'F11' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
+      const isMacFullscreen = e.key === 'f' && e.metaKey && e.ctrlKey && !e.shiftKey && !e.altKey
+      if (!isF11 && !isMacFullscreen) return
+      e.preventDefault()
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        const win = getCurrentWindow()
+        const current = await win.isFullscreen()
+        await win.setFullscreen(!current)
+      } catch { /* ignore */ }
+    }
+    document.addEventListener('keydown', onFullscreenKey)
+    return () => document.removeEventListener('keydown', onFullscreenKey)
   })
 
   createHotkey('?', (e) => {
@@ -674,6 +782,53 @@
     tabs = [...tabs, tab]
     activeTabId = tab.id
     clearTableEditor()
+  }
+
+  function openSchemaTab() {
+    const existing = findSchemaTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
+    saveActiveTabState()
+    dropWelcomeTabs()
+    const tab = createSchemaTab()
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+    clearTableEditor()
+  }
+
+  function openOrmTab() {
+    const existing = findOrmTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
+    saveActiveTabState()
+    dropWelcomeTabs()
+    const tab = createOrmTab()
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+    clearTableEditor()
+  }
+
+  /** @param {{ sql: string, mode: string }} detail */
+  async function runOrm(detail) {
+    if (!connection || !detail.sql.trim()) return
+    ormLoading = true
+    ormError = ''
+    ormColumns = []
+    ormRows = []
+    try {
+      const data = await executeSql(detail.sql)
+      ormColumns = data.columns ?? []
+      ormRows = data.rows ?? []
+      ormQueryMs = data.queryMs ?? data.query_ms ?? 0
+    } catch (e) {
+      ormError = String(e)
+    } finally {
+      ormLoading = false
+    }
   }
 
   /** @param {string} id */
@@ -824,6 +979,16 @@
     }
   }
 
+  async function loadEnums() {
+    if (!activeSchema) { enums = []; return }
+    try {
+      const list = await listEnums(activeSchema)
+      enums = list.map((e) => ({ name: e.name ?? '', values: e.values ?? [] }))
+    } catch {
+      enums = []
+    }
+  }
+
   async function loadTables() {
     if (!activeSchema) {
       tables = []
@@ -850,6 +1015,7 @@
       loadingTables = false
     }
     void loadIndexes()
+    void loadEnums()
   }
 
   async function reloadTableFromQuery(resetPage = true) {
@@ -1200,7 +1366,7 @@
     // Disconnect current (best-effort, non-blocking)
     disconnectPostgres().catch(() => {})
     connection = null
-    schemas = []; tables = []; indexes = []; activeSchema = 'public'; activeTable = null; tableFilter = ''
+    schemas = []; tables = []; indexes = []; enums = []; activeSchema = 'public'; activeTable = null; tableFilter = ''
     resetTabs()
     // Connect to the chosen saved connection
     autoConnecting = true
@@ -1471,6 +1637,8 @@
   ondisconnect={handleDisconnect}
   onrefresh={handleRefresh}
   onopenai={() => openAiTab()}
+  onopenorm={openOrmTab}
+  onopenSchema={openSchemaTab}
   onopenshortcuts={() => (showShortcutsModal = true)}
   oncheckupdate={() => void updateDialog?.checkNow()}
   onswitchdatabase={handleSwitchDatabase}
@@ -1500,7 +1668,6 @@
       connectionName={connection?.name ?? ''}
       {schemas}
       {tables}
-      {indexes}
       bind:activeSchema
       {activeTable}
       {activeView}
@@ -1514,6 +1681,8 @@
       ondisconnect={handleDisconnect}
       onopensettings={() => (showSettingsModal = true)}
       onopencommand={() => (commandOpen = true)}
+      onopenSchema={openSchemaTab}
+      onopenorm={openOrmTab}
     />
   {/if}
 
@@ -1562,6 +1731,26 @@
 
       {#if activeTab?.kind === 'ai'}
         <!-- handled by the always-mounted block above -->
+      {:else if activeTab?.kind === 'schema'}
+        <SchemaPage
+          {indexes}
+          {enums}
+          {tables}
+          loading={loadingTables}
+          onrefresh={async () => { await loadTables() }}
+        />
+      {:else if activeTab?.kind === 'orm'}
+        <OrmRunner
+          bind:code={ormCode}
+          bind:mode={ormMode}
+          columns={ormColumns}
+          rows={ormRows}
+          loading={ormLoading}
+          error={ormError}
+          queryMs={ormQueryMs}
+          schemaHints={sqlSchemaHints}
+          onrun={(d) => void runOrm(d)}
+        />
       {:else if activeTab?.kind === 'sql'}
         <SqlConsole
           bind:sql={sqlText}
@@ -1641,23 +1830,25 @@
           />
 
           <div class="flex min-h-0 min-w-0 flex-1">
-            <DataTable
-              {columns}
-              {rows}
-              {primaryKey}
-              {foreignKeys}
-              {hiddenColumns}
-              columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
-              loading={loadingRows}
-              saving={savingCell || deletingRows || insertingRow}
-              bind:selected
-              bind:focusedRow
-              bind:inspectorRow
-              bind:editingCell
-              onsave={handleSaveCell}
-              ondelete={handleDeleteRow}
-              onfollowforeignkey={(d) => void handleFollowForeignKey(d)}
-            />
+            {#key activeTabId}
+              <DataTable
+                {columns}
+                {rows}
+                {primaryKey}
+                {foreignKeys}
+                {hiddenColumns}
+                columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
+                loading={loadingRows}
+                saving={savingCell || deletingRows || insertingRow}
+                bind:selected
+                bind:focusedRow
+                bind:inspectorRow
+                bind:editingCell
+                onsave={handleSaveCell}
+                ondelete={handleDeleteRow}
+                onfollowforeignkey={(d) => void handleFollowForeignKey(d)}
+              />
+            {/key}
             <RowDetailPanel
               {columns}
               {rows}

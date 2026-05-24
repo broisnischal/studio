@@ -1,7 +1,9 @@
-/** @typedef {'light' | 'dark'} ThemeId */
+/** @typedef {import('$lib/themes/registry.js').ThemeId} ThemeId */
 
 import { bundledLanguages, createHighlighter } from 'shiki'
+import { DEFAULT_THEME_ID, shikiThemeId } from '$lib/themes/registry.js'
 
+/** Bundled Shiki themes — aligned with app.css (vitesse-light / vitesse-dark). */
 const THEME_IDS = ['vitesse-light', 'vitesse-dark']
 
 const LANG_IDS = [
@@ -30,11 +32,6 @@ function loadHighlighter() {
   return highlighterPromise
 }
 
-/** @param {ThemeId} theme */
-function shikiTheme(theme) {
-  return theme === 'light' ? 'vitesse-light' : 'vitesse-dark'
-}
-
 /** @param {string} [lang] */
 export function resolveShikiLang(lang) {
   const id = String(lang ?? '')
@@ -61,18 +58,19 @@ export function resolveShikiLang(lang) {
  * @param {string} [lang]
  * @param {ThemeId} [theme]
  */
-export async function highlightCode(code, lang, theme = 'dark') {
+export async function highlightCode(code, lang, theme = DEFAULT_THEME_ID) {
   const highlighter = await loadHighlighter()
   const resolved = resolveShikiLang(lang)
+  const shikiTheme = shikiThemeId(theme)
   try {
     return highlighter.codeToHtml(code, {
       lang: resolved,
-      theme: shikiTheme(theme),
+      theme: shikiTheme,
     })
   } catch {
     return highlighter.codeToHtml(code, {
       lang: 'plaintext',
-      theme: shikiTheme(theme),
+      theme: shikiTheme,
     })
   }
 }

@@ -29,8 +29,8 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
 use crate::db::{
     connect, connect_d1, connect_sqlite, disconnect,
     delete_table_row, delete_table_rows, execute_sql, get_table_rows, insert_table_row,
-    list_schemas, list_tables, list_indexes, test_connection, test_d1_connection, test_sqlite_connection,
-    update_table_cell, ConnectionConfig, D1Config, DbState, IndexInfo, InsertRowResult, SqlResult,
+    list_schemas, list_tables, list_indexes, list_enums, test_connection, test_d1_connection, test_sqlite_connection,
+    update_table_cell, ConnectionConfig, D1Config, DbState, EnumInfo, IndexInfo, InsertRowResult, SqlResult,
     SqliteConfig, TableInfo, TableRows,
 };
 use serde_json::Value;
@@ -110,6 +110,14 @@ pub async fn pg_list_indexes(
     schema: String,
 ) -> Result<Vec<IndexInfo>, String> {
     list_indexes(state, schema).await
+}
+
+#[tauri::command]
+pub async fn pg_list_enums(
+    state: State<'_, DbState>,
+    schema: String,
+) -> Result<Vec<EnumInfo>, String> {
+    list_enums(state, schema).await
 }
 
 #[tauri::command]

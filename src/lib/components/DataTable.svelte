@@ -387,8 +387,7 @@
       if (!el) return;
       el.focus();
       if (el instanceof HTMLInputElement) {
-        const len = el.value.length;
-        el.setSelectionRange(len, len);
+        el.select();
       }
     });
   });
@@ -414,6 +413,7 @@
 
   function toggleAll(checked) {
     selected = checked ? new Set(rows.map((_, i) => i)) : new Set();
+    lastSelectAnchor = null;
   }
 
   function toggleRow(idx) {
@@ -421,6 +421,26 @@
     if (next.has(idx)) next.delete(idx);
     else next.add(idx);
     selected = next;
+  }
+
+  /** Last row index clicked without Shift — the anchor for range selection. */
+  let lastSelectAnchor = $state(/** @type {number | null} */ (null));
+
+  /**
+   * @param {number} idx
+   * @param {boolean} shiftKey
+   */
+  function handleRowSelect(idx, shiftKey) {
+    if (shiftKey && lastSelectAnchor !== null) {
+      const lo = Math.min(lastSelectAnchor, idx);
+      const hi = Math.max(lastSelectAnchor, idx);
+      const next = new Set(selected);
+      for (let i = lo; i <= hi; i++) next.add(i);
+      selected = next;
+    } else {
+      toggleRow(idx);
+      lastSelectAnchor = idx;
+    }
   }
 
   /** @param {number} rowIdx */
@@ -436,13 +456,13 @@
     expandedRows = next;
   }
 
-  const gutterColCount = $derived(
-    (showRowExpand ? 1 : 0) + (showSelection ? 1 : 0),
-  );
+  const ROW_EXPAND_COL_WIDTH = 34;
+  /** Fits 16px checkbox with equal inset; no extra horizontal padding in cells */
+  const ROW_SELECT_COL_WIDTH = 32;
   const visibleColumns = $derived(
     columns.filter((c) => !hiddenColumns.has(c.name)),
   );
-  const tableColSpan = $derived(gutterColCount + visibleColumns.length);
+  const dataColSpan = $derived(visibleColumns.length);
 
   const allSelected = $derived(
     rows.length > 0 && selected.size === rows.length,
@@ -492,16 +512,32 @@
     resizeStartWidth = columnWidths[colName] ?? defaultColumnWidth("");
   }
 
+  // Batch column resize updates to animation frames — pointermove can fire at
+  // 120Hz+, but we only need to update the DOM at 60fps.
+  let _resizeRafId = 0;
+  let _pendingResizeWidth = 0;
+
   /** @param {number} dx */
   function applyColumnResize(dx) {
     if (!resizingColName) return;
-    columnWidths = {
-      ...columnWidths,
-      [resizingColName]: clampColumnWidth(resizeStartWidth + dx),
-    };
+    _pendingResizeWidth = clampColumnWidth(resizeStartWidth + dx);
+    if (_resizeRafId) return;
+    _resizeRafId = requestAnimationFrame(() => {
+      _resizeRafId = 0;
+      if (!resizingColName) return;
+      columnWidths = { ...columnWidths, [resizingColName]: _pendingResizeWidth };
+    });
   }
 
   function endColumnResize() {
+    if (_resizeRafId) {
+      cancelAnimationFrame(_resizeRafId);
+      _resizeRafId = 0;
+      // Commit the last pending width synchronously
+      if (resizingColName) {
+        columnWidths = { ...columnWidths, [resizingColName]: _pendingResizeWidth };
+      }
+    }
     if (resizingColName && columnWidthsKey) {
       saveColumnWidths(columnWidthsKey, columnWidths);
     }
@@ -526,11 +562,12 @@
     <ContextMenu.Trigger disabled={rows.length === 0}>
       {#snippet child({ props })}
         {@const bitsContextMenu = props.oncontextmenu}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div
           {...props}
           tabindex={-1}
           class={cn(
-            "app-scroll relative overflow-auto bg-panel select-none",
+            "app-scroll relative overflow-auto bg-panel select-none [scrollbar-gutter:stable] [contain:content]",
             embedded ? "max-h-80" : "min-h-0 flex-1",
             resizingColName && "cursor-col-resize",
           )}
@@ -569,10 +606,10 @@
           >
             <colgroup>
               {#if showRowExpand}
-                <col style="width: 28px" />
+                <col style="width: {ROW_EXPAND_COL_WIDTH}px" />
               {/if}
               {#if showSelection}
-                <col style="width: 36px" />
+                <col style="width: {ROW_SELECT_COL_WIDTH}px" />
               {/if}
               {#each visibleColumns as col (col.name)}
                 <col
@@ -586,15 +623,24 @@
             <thead class="studio-chrome sticky top-0 z-10 bg-panel">
               <tr>
                 {#if showRowExpand}
-                  <th class="w-7 px-0 py-1.5" aria-label="Expand row"></th>
+                  <th
+                    class="studio-table-gutter"
+                    style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
+                    aria-label="Expand row"
+                  ></th>
                 {/if}
                 {#if showSelection}
-                  <th class="w-9 px-2 py-1.5 text-left font-normal">
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={someSelected}
-                      onCheckedChange={(v) => toggleAll(v === true)}
-                    />
+                  <th
+                    class="studio-table-gutter font-normal"
+                    style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px"
+                  >
+                    <div class="studio-table-gutter-inner">
+                      <Checkbox
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onCheckedChange={(v) => toggleAll(v === true)}
+                      />
+                    </div>
                   </th>
                 {/if}
                 {#each visibleColumns as col (col.name)}
@@ -604,13 +650,13 @@
                   )}
                   <th
                     class={cn(
-                      "group/th relative overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal",
+                      "group/th relative overflow-hidden px-3 py-1 text-left font-normal",
                       resizingColName === col.name && "bg-accent/30",
                     )}
                     style="width: {colW}px; min-width: {colW}px; max-width: {colW}px"
                   >
-                    <div class="flex min-w-0 items-start gap-1.5">
-                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <div class="flex min-w-0 flex-1 flex-col gap-px leading-tight">
                         <span
                           class="block truncate font-mono text-ui-sm text-foreground"
                           data-font="mono"
@@ -623,7 +669,7 @@
                           >{col.dataType ?? col.data_type}</span
                         >
                       </div>
-                      <ArrowUpDown class="mt-0.5 size-3 shrink-0 opacity-30" />
+                      <ArrowUpDown class="size-3 shrink-0 opacity-30" />
                     </div>
                     <ColumnResizeHandle
                       onresizestart={() => startColumnResize(col.name)}
@@ -659,45 +705,55 @@
                   >
                     {#if showRowExpand}
                       <td
-                        class="w-7 px-0 py-1 align-middle"
-                        onclick={(e) => e.stopPropagation()}
+                        class="studio-table-gutter studio-table-expand-gutter"
+                        style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
+                        aria-expanded={isRowExpanded(idx)}
+                        aria-label={isRowExpanded(idx)
+                          ? "Collapse row JSON"
+                          : "Expand row JSON"}
+                        title={isRowExpanded(idx)
+                          ? "Collapse row"
+                          : "Expand row as JSON"}
+                        onclick={(e) => {
+                          e.stopPropagation()
+                          toggleRowExpand(idx)
+                        }}
                       >
-                        <button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          tabindex={-1}
-                          class={cn(
-                            "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] hover:text-foreground group-hover/row:opacity-100",
-                            isRowExpanded(idx) && "opacity-100",
-                          )}
-                          aria-expanded={isRowExpanded(idx)}
-                          aria-label={isRowExpanded(idx)
-                            ? "Collapse row JSON"
-                            : "Expand row JSON"}
-                          title={isRowExpanded(idx)
-                            ? "Collapse row"
-                            : "Expand row as JSON"}
-                          onclick={() => toggleRowExpand(idx)}
-                        >
-                          {#if isRowExpanded(idx)}
-                            <ChevronDown class="size-3.5" />
-                          {:else}
-                            <ChevronRight class="size-3.5" />
-                          {/if}
-                        </button>
+                        <div class="studio-table-gutter-inner">
+                          <span
+                            class={cn(
+                              "studio-row-expand-icon inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color] hover:bg-accent/50 hover:text-foreground",
+                              isRowExpanded(idx)
+                                ? "opacity-100"
+                                : "opacity-0 group-hover/row:opacity-100",
+                            )}
+                            aria-hidden="true"
+                          >
+                            {#if isRowExpanded(idx)}
+                              <ChevronDown class="size-3.5" />
+                            {:else}
+                              <ChevronRight class="size-3.5" />
+                            {/if}
+                          </span>
+                        </div>
                       </td>
                     {/if}
                     {#if showSelection}
                       <td
-                        class="w-9 px-2 py-1"
-                        onclick={(e) => e.stopPropagation()}
+                        class="studio-table-gutter"
+                        style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px"
+                        onclick={(e) => {
+                          e.stopPropagation()
+                          handleRowSelect(idx, e.shiftKey)
+                        }}
                       >
-                        <Checkbox
-                          tabindex={-1}
-                          checked={selected.has(idx)}
-                          onCheckedChange={() => toggleRow(idx)}
-                        />
+                        <div class="studio-table-gutter-inner">
+                          <Checkbox
+                            tabindex={-1}
+                            checked={selected.has(idx)}
+                            onCheckedChange={() => {}}
+                          />
+                        </div>
                       </td>
                     {/if}
                     {#each row as cell, colIdx}
@@ -716,7 +772,7 @@
                             "overflow-hidden font-mono",
                             isEditing
                               ? "relative p-0 align-middle ring-2 ring-inset ring-primary bg-background"
-                              : "whitespace-nowrap px-3 py-1 text-muted-foreground",
+                              : "whitespace-nowrap px-3 py-0.5 text-muted-foreground",
                             cellFk &&
                               !isEditing &&
                               "group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30",
@@ -898,9 +954,22 @@
                   </tr>
                   {#if showRowExpand && isRowExpanded(idx)}
                     <tr class="bg-muted/15">
-                      <td colspan={tableColSpan} class="p-0 align-top">
+                      <td
+                        class="studio-table-gutter"
+                        style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
+                        aria-hidden="true"
+                      ></td>
+                      {#if showSelection}
+                        <td
+                          class="studio-table-gutter"
+                          style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px"
+                          aria-hidden="true"
+                        ></td>
+                      {/if}
+                      <td colspan={dataColSpan} class="p-0 align-top">
                         <div class="px-2 py-2 sm:px-3">
                           <MiniJsonViewer
+                            class="max-w-none"
                             value={rowToRecord(columns, row)}
                             maxHeight={embedded
                               ? "min(40vh, 12rem)"

@@ -1,9 +1,10 @@
 import { mount } from 'svelte'
 import './app.css'
 import App from './App.svelte'
-import { applySettings, loadSettings } from '$lib/stores/settings.js'
+import { applySettings, installZoomShortcuts, loadSettings } from '$lib/stores/settings.js'
 
 applySettings(loadSettings())
+installZoomShortcuts()
 
 // ── Native-app feel ────────────────────────────────────────────────────────
 // Disable browser right-click context menu everywhere.

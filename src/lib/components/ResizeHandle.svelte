@@ -56,13 +56,9 @@
 >
   <div
     class={cn(
-      'absolute transition-colors group-hover:bg-border/80 group-active:bg-border',
-      axis === 'x' && 'inset-y-0 w-3',
-      axis === 'x' && edge === 'end' && '-right-1',
-      axis === 'x' && edge === 'start' && '-left-1',
-      axis === 'y' && 'inset-x-0 h-3',
-      axis === 'y' && edge === 'end' && '-bottom-1',
-      axis === 'y' && edge === 'start' && '-top-1',
+      'absolute rounded-full bg-border/40 transition-colors group-hover:bg-primary/60 group-active:bg-primary',
+      axis === 'x' && 'inset-y-2 w-0.5 left-1/2 -translate-x-1/2',
+      axis === 'y' && 'inset-x-2 h-0.5 top-1/2 -translate-y-1/2',
     )}
   ></div>
 </div>

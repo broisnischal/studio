@@ -351,6 +351,19 @@ fn pg_cast_type_ref(udt_schema: &str, udt_name: &str) -> Result<String, String> 
     Ok(format!(r#""{udt_schema}"."{udt_name}""#))
 }
 
+/// Returns the PostgreSQL cast keyword for datetime/date/time types so that
+/// string bindings are explicitly cast rather than rejected as `text`.
+fn pg_datetime_cast(data_type: &str) -> Option<&'static str> {
+    match normalize_pg_type(data_type).as_str() {
+        "timestamp with time zone" | "timestamptz" => Some("timestamptz"),
+        "timestamp without time zone" | "timestamp" => Some("timestamp"),
+        "time with time zone" | "timetz" => Some("timetz"),
+        "time without time zone" | "time" => Some("time"),
+        "date" => Some("date"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PgColumnMeta {
     data_type: String,
@@ -370,6 +383,9 @@ impl PgColumnMeta {
             let type_ref = pg_cast_type_ref(udt_schema, udt_name)?;
             return Ok(format!(r#""{column}" = $1::{type_ref}"#));
         }
+        if let Some(cast) = pg_datetime_cast(&self.data_type) {
+            return Ok(format!(r#""{column}" = $1::{cast}"#));
+        }
         Ok(format!(r#""{column}" = $1"#))
     }
 
@@ -382,6 +398,9 @@ impl PgColumnMeta {
             let udt_schema = self.udt_schema.as_deref().unwrap_or("public");
             let type_ref = pg_cast_type_ref(udt_schema, udt_name)?;
             return Ok(format!("${bind_idx}::{type_ref}"));
+        }
+        if let Some(cast) = pg_datetime_cast(&self.data_type) {
+            return Ok(format!("${bind_idx}::{cast}"));
         }
         Ok(format!("${bind_idx}"))
     }

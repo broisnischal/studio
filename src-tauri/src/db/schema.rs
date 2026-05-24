@@ -300,6 +300,42 @@ async fn list_indexes_d1(cfg: &super::connection::D1Config) -> Result<Vec<IndexI
         .collect())
 }
 
+// ── Enums (PostgreSQL only) ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumInfo {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+async fn list_enums_pg(pool: &PgPool, schema: &str) -> Result<Vec<EnumInfo>, String> {
+    let rows = sqlx::query(
+        r#"
+        SELECT t.typname::text AS name,
+               array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS values
+        FROM pg_catalog.pg_type t
+        JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+        JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
+        WHERE n.nspname = $1
+        GROUP BY t.typname
+        ORDER BY t.typname
+        "#,
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list enums: {e}"))?;
+
+    rows.iter()
+        .map(|row| {
+            let name: String = row.try_get("name").map_err(|e| e.to_string())?;
+            let values: Vec<String> = row.try_get("values").map_err(|e| e.to_string())?;
+            Ok(EnumInfo { name, values })
+        })
+        .collect()
+}
+
 // ── Public dispatch ───────────────────────────────────────────────────────────
 
 pub async fn list_schemas(state: State<'_, DbState>) -> Result<Vec<String>, String> {
@@ -328,5 +364,16 @@ pub async fn list_indexes(state: State<'_, DbState>, schema: String) -> Result<V
         }
         ActiveConnection::Sqlite(pool) => list_indexes_sqlite(&pool).await,
         ActiveConnection::D1(cfg) => list_indexes_d1(&cfg).await,
+    }
+}
+
+pub async fn list_enums(state: State<'_, DbState>, schema: String) -> Result<Vec<EnumInfo>, String> {
+    match require_conn(&state)? {
+        ActiveConnection::Postgres(pool) => {
+            validate_ident(&schema)?;
+            list_enums_pg(&pool, &schema).await
+        }
+        // SQLite / D1 have no enum types
+        _ => Ok(vec![]),
     }
 }

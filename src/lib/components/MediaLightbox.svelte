@@ -62,7 +62,9 @@
     onkeydown={handleKey}
   >
     <!-- Top toolbar -->
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
     <div
+      role="presentation"
       class="absolute top-4 right-4 z-10 flex items-center gap-2"
       onclick={(e) => e.stopPropagation()}
     >
@@ -107,7 +109,9 @@
     </div>
 
     <!-- Content -->
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
     <div
+      role="presentation"
       class="flex items-center justify-center overflow-auto"
       style="max-width: 94vw; max-height: 88vh"
       onclick={(e) => e.stopPropagation()}
@@ -126,7 +130,9 @@
           }}
         />
       {:else if type === 'pdf'}
+        <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
         <div
+          role="presentation"
           class="flex flex-col items-center gap-5 rounded-2xl bg-white/10 px-10 py-12 text-white backdrop-blur-sm"
           onclick={(e) => e.stopPropagation()}
         >
@@ -155,7 +161,9 @@
     </div>
 
     <!-- Bottom info bar -->
+    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
     <div
+      role="presentation"
       class="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/50 px-3 py-1.5 backdrop-blur-sm"
       onclick={(e) => e.stopPropagation()}
     >

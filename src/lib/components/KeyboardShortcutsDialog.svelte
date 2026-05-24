@@ -20,6 +20,7 @@
         { keys: [mod, 'Tab'], desc: 'Next tab' },
         { keys: [mod, shift, 'Tab'], desc: 'Previous tab' },
         { keys: [mod, 'B'], desc: 'Toggle sidebar' },
+        { keys: [mod, shift, 'F'], desc: 'Focus table filter' },
       ],
     },
     {
@@ -27,6 +28,8 @@
       shortcuts: [
         { keys: [mod, shift, 'D'], desc: 'Data view' },
         { keys: [mod, shift, 'S'], desc: 'SQL editor' },
+        { keys: [mod, shift, 'O'], desc: 'ORM Runner' },
+        { keys: [mod, shift, 'E'], desc: 'Schema Explorer' },
         { keys: [mod, shift, 'A'], desc: 'AI chat' },
       ],
     },
@@ -40,6 +43,13 @@
       ],
     },
     {
+      label: 'ORM Runner',
+      shortcuts: [
+        { keys: [mod, '↵'], desc: 'Run query' },
+        { keys: [mod, 'S'], desc: 'Format code' },
+      ],
+    },
+    {
       label: 'Data Table',
       shortcuts: [
         { keys: [mod, 'F'], desc: 'Search rows' },
@@ -48,6 +58,8 @@
         { keys: [mod, 'C'], desc: 'Copy cell value' },
         { keys: [mod, '↵'], desc: 'Navigate to FK row' },
         { keys: [mod, '⌫'], desc: 'Delete selected rows' },
+        { keys: [mod, '←'], desc: 'Previous page' },
+        { keys: [mod, '→'], desc: 'Next page' },
       ],
     },
     {
@@ -60,10 +72,22 @@
       ],
     },
     {
+      label: 'Appearance',
+      shortcuts: [
+        { keys: [mod, 'M'], desc: 'Cycle theme' },
+        { keys: [mod, shift, 'M'], desc: 'Previous theme' },
+        { keys: [mod, '+'], desc: 'Zoom in' },
+        { keys: [mod, '−'], desc: 'Zoom out' },
+        { keys: [mod, '0'], desc: 'Reset zoom' },
+      ],
+    },
+    {
       label: 'General',
       shortcuts: [
         { keys: ['?'], desc: 'Show keyboard shortcuts' },
         { keys: ['Esc'], desc: 'Dismiss / close' },
+        { keys: [mod, 'R'], desc: 'Refresh current view' },
+        { keys: ['F11'], desc: 'Toggle fullscreen' },
       ],
     },
   ]

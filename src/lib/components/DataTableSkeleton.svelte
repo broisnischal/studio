@@ -40,10 +40,10 @@
   <table class="studio-data-table w-max min-w-full table-fixed text-ui-sm">
     <colgroup>
       {#if showRowExpand}
-        <col style="width: 28px" />
+        <col style="width: 34px" />
       {/if}
       {#if showSelection}
-        <col style="width: 36px" />
+        <col style="width: 32px" />
       {/if}
       {#each displayColumns as col (col.name)}
         <col style="width: {colWidth(col)}px" />
@@ -52,21 +52,31 @@
     <thead class="studio-chrome sticky top-0 z-10 bg-panel">
       <tr>
         {#if showRowExpand}
-          <th class="w-7 px-0 py-1.5" aria-hidden="true"></th>
+          <th
+            class="studio-table-gutter"
+            style="width: 34px; min-width: 34px; max-width: 34px"
+            aria-hidden="true"
+          ></th>
         {/if}
         {#if showSelection}
-          <th class="w-9 px-2 py-1.5" aria-hidden="true">
-            <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+          <th
+            class="studio-table-gutter"
+            style="width: 32px; min-width: 32px; max-width: 32px"
+            aria-hidden="true"
+          >
+            <div class="studio-table-gutter-inner">
+              <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+            </div>
           </th>
         {/if}
         {#each displayColumns as col (col.name)}
           {@const w = colWidth(col)}
           <th
-            class="overflow-hidden py-1.5 pl-3 pr-2 text-left font-normal"
+            class="overflow-hidden px-3 py-1 text-left font-normal"
             style="width: {w}px; min-width: {w}px; max-width: {w}px"
             aria-hidden="true"
           >
-            <div class="flex min-w-0 flex-col gap-1">
+            <div class="flex min-w-0 flex-col gap-px leading-tight">
               <div class="skeleton h-3 max-w-[min(7rem,75%)] rounded-sm" aria-hidden="true"></div>
               <div class="skeleton h-2 max-w-[min(4.5rem,50%)] rounded-sm opacity-80" aria-hidden="true"></div>
             </div>
@@ -76,19 +86,29 @@
     </thead>
     <tbody>
       {#each Array(rowCount) as _, rowIdx}
-        <tr class="border-b border-table-grid">
+        <tr>
           {#if showRowExpand}
-            <td class="w-7 px-0 py-1 align-middle" aria-hidden="true"></td>
+            <td
+              class="studio-table-gutter"
+              style="width: 34px; min-width: 34px; max-width: 34px"
+              aria-hidden="true"
+            ></td>
           {/if}
           {#if showSelection}
-            <td class="w-9 px-2 py-1 align-middle" aria-hidden="true">
-              <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+            <td
+              class="studio-table-gutter"
+              style="width: 32px; min-width: 32px; max-width: 32px"
+              aria-hidden="true"
+            >
+              <div class="studio-table-gutter-inner">
+                <div class="skeleton size-3.5 rounded-[4px]" aria-hidden="true"></div>
+              </div>
             </td>
           {/if}
           {#each displayColumns as col, colIdx (col.name)}
             {@const w = colWidth(col)}
             <td
-              class="overflow-hidden px-3 py-1 align-middle"
+              class="overflow-hidden px-3 py-0.5 align-middle"
               style="width: {w}px; min-width: {w}px; max-width: {w}px"
               aria-hidden="true"
             >

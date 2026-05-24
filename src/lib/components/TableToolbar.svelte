@@ -29,6 +29,7 @@
     activeFilters,
     createFilter,
   } from "$lib/table-query.js";
+  import { untrack } from "svelte";
   import { formatCompactCount } from "$lib/table-list.js";
 
   /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
@@ -94,7 +95,7 @@
   let sortMenuOpen = $state(false);
   let columnsMenuOpen = $state(false);
   let limitOffsetOpen = $state(false);
-  let draftLimit = $state(pageSize);
+  let draftLimit = $state(untrack(() => pageSize));
   let draftOffset = $state(0);
   let limitError = $state("");
 
@@ -116,7 +117,7 @@
 
   // Local value so the input is not controlled by the prop during typing.
   // Keeps focus when the parent triggers a re-render (e.g. loading state).
-  let localSearch = $state(rowSearch);
+  let localSearch = $state(untrack(() => rowSearch));
   let searchDebounce = /** @type {ReturnType<typeof setTimeout> | null} */ (
     null
   );
@@ -671,16 +672,12 @@
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-52 p-0 text-ui-sm">
         <div class="border-b border-border px-3 py-2.5">
-          <p class="font-medium text-foreground">Jump to offset</p>
-          <p class="mt-0.5 text-ui-xs leading-snug text-muted-foreground">
-            Set an exact SQL <code class="font-mono">LIMIT</code> and
-            <code class="font-mono">OFFSET</code>
-          </p>
+          <p class="font-medium text-foreground">Pagination</p>
         </div>
         <div class="flex flex-col gap-3 p-3">
           <label class="flex flex-col gap-1">
             <span class="text-ui-xs text-muted-foreground">
-              Limit (rows per page, max {MAX_PAGE_SIZE.toLocaleString()})
+              Limit
             </span>
             <Input
               class={cn(

@@ -41,10 +41,10 @@
   aria-orientation="vertical"
   aria-label="Resize column"
   tabindex="-1"
-  class="group/handle absolute top-0 right-0 z-20 h-full w-2 translate-x-1/2 cursor-col-resize touch-none select-none"
+  class="group/handle absolute inset-y-0 right-0 z-20 w-4 cursor-col-resize touch-none select-none"
   onpointerdown={handlePointerDown}
 >
   <div
-    class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/0 transition-colors group-hover/handle:bg-primary/40 group-active/handle:bg-primary"
+    class="absolute inset-y-1.5 right-0 w-0.5 rounded-full bg-border/40 transition-colors group-hover/th:bg-border/70 group-hover/handle:bg-primary group-active/handle:bg-primary"
   ></div>
 </div>

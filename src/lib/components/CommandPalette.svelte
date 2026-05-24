@@ -1,7 +1,9 @@
 <script>
-  import Table2      from '@lucide/svelte/icons/table-2'
-  import Terminal    from '@lucide/svelte/icons/terminal'
-  import Settings    from '@lucide/svelte/icons/settings'
+  import Table2         from '@lucide/svelte/icons/table-2'
+  import Terminal       from '@lucide/svelte/icons/terminal'
+  import Code2          from '@lucide/svelte/icons/code-2'
+  import LayoutTemplate from '@lucide/svelte/icons/layout-template'
+  import Settings       from '@lucide/svelte/icons/settings'
   import Unplug      from '@lucide/svelte/icons/unplug'
   import Database    from '@lucide/svelte/icons/database'
   import HardDrive   from '@lucide/svelte/icons/hard-drive'
@@ -36,6 +38,8 @@
     ondisconnect = () => {},
     onrefresh = () => {},
     onopenai = () => {},
+    onopenorm = () => {},
+    onopenSchema = () => {},
     onopenshortcuts = () => {},
     oncheckupdate = () => {},
     /** @param {import('$lib/stores/connections.js').SavedConnection} conn */
@@ -82,15 +86,25 @@
 
       {#if connected}
         <Command.Group heading="Views">
+          <Command.Item value="open table data browser" onSelect={() => run(onopentable)}>
+            <Table2 class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Table data</span>
+            <Command.Shortcut>⌘⇧D</Command.Shortcut>
+          </Command.Item>
           <Command.Item value="open sql editor query console" onSelect={() => run(onopensql)}>
-            <Terminal class="size-4 opacity-60" />
-            <span>SQL editor</span>
+            <Terminal class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">SQL editor</span>
             <Command.Shortcut>⌘⇧S</Command.Shortcut>
           </Command.Item>
-          <Command.Item value="open table data browser" onSelect={() => run(onopentable)}>
-            <Table2 class="size-4 opacity-60" />
-            <span>Table data</span>
-            <Command.Shortcut>⌘⇧D</Command.Shortcut>
+          <Command.Item value="open orm runner drizzle prisma query builder" onSelect={() => run(onopenorm)}>
+            <Code2 class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">ORM Runner</span>
+            <Command.Shortcut>⌘⇧O</Command.Shortcut>
+          </Command.Item>
+          <Command.Item value="open schema explorer indexes enums views materialized" onSelect={() => run(onopenSchema)}>
+            <LayoutTemplate class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Schema Explorer</span>
+            <Command.Shortcut>⌘⇧E</Command.Shortcut>
           </Command.Item>
         </Command.Group>
 
@@ -101,10 +115,10 @@
                 value="schema {schema}"
                 onSelect={() => run(() => onschemachange(schema))}
               >
-                <Database class="size-4 opacity-60" />
-                <span class="font-mono">{schema}</span>
+                <Database class="size-4 shrink-0 opacity-60" />
+                <span data-slot="command-label" class="truncate font-mono">{schema}</span>
                 {#if schema === activeSchema}
-                  <span class="ml-auto text-ui-xs text-muted-foreground">current</span>
+                  <span data-slot="command-trailing" class="shrink-0 text-ui-xs text-muted-foreground">current</span>
                 {/if}
               </Command.Item>
             {/each}
@@ -116,12 +130,12 @@
             {#each tables as table (table.name)}
               <Command.Item
                 value="table {activeSchema} {table.name}"
-                class="gap-2"
                 onSelect={() => run(() => ontableselect(table.name))}
               >
-                <Table2 class="size-4 opacity-60" />
-                <span class="min-w-0 truncate font-mono">{table.name}</span>
+                <Table2 class="size-4 shrink-0 opacity-60" />
+                <span data-slot="command-label" class="truncate font-mono">{table.name}</span>
                 <span
+                  data-slot="command-trailing"
                   class="shrink-0 font-mono text-ui-xs tabular-nums text-muted-foreground"
                   title={table.rowCount != null ? Number(table.rowCount).toLocaleString('en-US') : undefined}
                 >
@@ -134,8 +148,8 @@
 
         <Command.Group heading="AI">
           <Command.Item value="ask ai assistant chat query" onSelect={() => run(onopenai)}>
-            <Bot class="size-4 opacity-60" />
-            <span>Ask AI</span>
+            <Bot class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Ask AI</span>
             <Command.Shortcut>⌘⇧A</Command.Shortcut>
           </Command.Item>
         </Command.Group>
@@ -145,8 +159,8 @@
             value="open query history sql statements"
             onSelect={() => run(onopenqueryhistory)}
           >
-            <History class="size-4 opacity-60" />
-            <span>Query history</span>
+            <History class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Query history</span>
           </Command.Item>
         </Command.Group>
 
@@ -155,11 +169,10 @@
             {#each savedQueries as entry (entry.id)}
               <Command.Item
                 value="saved query {entry.name} {entry.sql}"
-                class="gap-2"
                 onSelect={() => run(() => onqueryselect(entry.sql))}
               >
                 <Bookmark class="size-4 shrink-0 opacity-60" />
-                <span class="min-w-0 truncate font-mono text-ui-xs">{entry.name}</span>
+                <span data-slot="command-label" class="min-w-0 truncate font-mono text-ui-xs">{entry.name}</span>
               </Command.Item>
             {/each}
           </Command.Group>
@@ -170,11 +183,10 @@
             {#each queryHistory.slice(0, 20) as entry (entry.id)}
               <Command.Item
                 value="recent query {entry.title} {entry.sql}"
-                class="gap-2"
                 onSelect={() => run(() => onqueryselect(entry.sql))}
               >
                 <History class="size-4 shrink-0 opacity-60" />
-                <span class="min-w-0 truncate font-mono text-ui-xs">{entry.title}</span>
+                <span data-slot="command-label" class="min-w-0 truncate font-mono text-ui-xs">{entry.title}</span>
               </Command.Item>
             {/each}
           </Command.Group>
@@ -182,32 +194,32 @@
 
         <Command.Group heading="Actions">
           <Command.Item value="refresh schema tables" onSelect={() => run(onrefresh)}>
-            <RefreshCw class="size-4 opacity-60" />
-            <span>Refresh tables</span>
+            <RefreshCw class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Refresh tables</span>
           </Command.Item>
           <Command.Item value="open settings preferences" onSelect={() => run(onopensettings)}>
-            <Settings class="size-4 opacity-60" />
-            <span>Settings</span>
+            <Settings class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Settings</span>
           </Command.Item>
           <Command.Item value="keyboard shortcuts keybindings hotkeys help" onSelect={() => run(onopenshortcuts)}>
-            <Keyboard class="size-4 opacity-60" />
-            <span>Keyboard shortcuts</span>
+            <Keyboard class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Keyboard shortcuts</span>
             <Command.Shortcut>?</Command.Shortcut>
           </Command.Item>
           <Command.Item value="check for updates upgrade version" onSelect={() => run(oncheckupdate)}>
-            <ArrowDownToLine class="size-4 opacity-60" />
-            <span>Check for updates</span>
+            <ArrowDownToLine class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Check for updates</span>
           </Command.Item>
           <Command.Item value="disconnect database" onSelect={() => run(ondisconnect)}>
-            <Unplug class="size-4 opacity-60" />
-            <span>Disconnect</span>
+            <Unplug class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Disconnect</span>
           </Command.Item>
         </Command.Group>
       {:else if savedConnections.length === 0}
         <Command.Group heading="Connection">
           <Command.Item value="add connection connect postgres" onSelect={() => run(onopenconnection)}>
-            <Database class="size-4 opacity-60" />
-            <span>Add connection</span>
+            <Database class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Add connection</span>
           </Command.Item>
         </Command.Group>
       {/if}
@@ -223,13 +235,13 @@
               onSelect={() => run(() => onswitchdatabase(conn))}
               disabled={isActive}
             >
-              <Icon class="size-4 opacity-60" />
-              <div class="flex min-w-0 flex-1 flex-col">
+              <Icon class="size-4 shrink-0 opacity-60" />
+              <div data-slot="command-label" class="flex min-w-0 flex-1 flex-col">
                 <span class="truncate">{conn.name}</span>
                 <span class="truncate font-mono text-[11px] text-muted-foreground">{connSubtitle(conn)}</span>
               </div>
               {#if isActive}
-                <span class="shrink-0 text-xs text-muted-foreground">connected</span>
+                <span data-slot="command-trailing" class="shrink-0 text-xs text-muted-foreground">connected</span>
               {/if}
             </Command.Item>
           {/each}
@@ -238,8 +250,8 @@
             value="new connection add connect database"
             onSelect={() => run(onopenconnection)}
           >
-            <Database class="size-4 opacity-60" />
-            <span>New connection…</span>
+            <Database class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">New connection…</span>
           </Command.Item>
         </Command.Group>
       {/if}

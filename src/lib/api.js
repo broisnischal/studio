@@ -106,6 +106,15 @@ export async function listIndexes(schema) {
   }
 }
 
+/** @param {string} schema */
+export async function listEnums(schema) {
+  try {
+    return await invoke('pg_list_enums', { schema })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}
+
 /**
  * @param {string} schema
  * @param {string} table
