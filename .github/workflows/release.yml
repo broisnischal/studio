@@ -133,11 +133,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
 
-          # Copy updater bundle with stable name (no version) so the URL never changes
+          # tauri build only produces .app — package and sign the updater bundle manually
+          pushd "$DIR/macos"
+          tar czf "db-studio.app.tar.gz" "db-studio.app"
+          popd
+          npx tauri signer sign "$DIR/macos/db-studio.app.tar.gz"
+
           cp "$DIR/macos/db-studio.app.tar.gz"     db-studio_aarch64.app.tar.gz
           cp "$DIR/macos/db-studio.app.tar.gz.sig" updater.sig
 
@@ -153,9 +160,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           DIR="src-tauri/target/x86_64-apple-darwin/release/bundle"
+
+          pushd "$DIR/macos"
+          tar czf "db-studio.app.tar.gz" "db-studio.app"
+          popd
+          npx tauri signer sign "$DIR/macos/db-studio.app.tar.gz"
 
           cp "$DIR/macos/db-studio.app.tar.gz"     db-studio_x64.app.tar.gz
           cp "$DIR/macos/db-studio.app.tar.gz.sig" updater.sig
@@ -172,9 +186,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           DIR="src-tauri/target/release/bundle"
+
+          # Package and sign the AppImage updater bundle manually
+          pushd "$DIR/appimage"
+          tar czf "db-studio_${VERSION}_amd64.AppImage.tar.gz" "db-studio_${VERSION}_amd64.AppImage"
+          popd
+          npx tauri signer sign "$DIR/appimage/db-studio_${VERSION}_amd64.AppImage.tar.gz"
 
           cp "$DIR/appimage/db-studio_${VERSION}_amd64.AppImage.tar.gz"     db-studio_amd64.AppImage.tar.gz
           cp "$DIR/appimage/db-studio_${VERSION}_amd64.AppImage.tar.gz.sig" updater.sig
@@ -193,9 +215,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
           $dir     = "src-tauri/target/release/bundle"
+
+          # Package and sign the NSIS updater bundle manually
+          Compress-Archive `
+            -Path "$dir/nsis/db-studio_${version}_x64-setup.exe" `
+            -DestinationPath "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip" `
+            -Force
+          npx tauri signer sign "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"
 
           Copy-Item "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"     "db-studio_x64-setup.nsis.zip"
           Copy-Item "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip.sig" "updater.sig"
