@@ -2,6 +2,7 @@
   import PanelLeft from "@lucide/svelte/icons/panel-left";
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import History from "@lucide/svelte/icons/history";
   import ListFilter from "@lucide/svelte/icons/list-filter";
   import ArrowUpDown from "@lucide/svelte/icons/arrow-up-down";
@@ -23,6 +24,7 @@
   import { cn } from "$lib/utils.js";
   import {
     FILTER_OPS,
+    MAX_PAGE_SIZE,
     PAGE_SIZE_OPTIONS,
     activeFilters,
     createFilter,
@@ -51,8 +53,11 @@
     onrefresh = () => {},
     onprev = () => {},
     onnext = () => {},
+    offset = 0,
     onpagechange = () => {},
     onpagesizechange = () => {},
+    /** @param {number} limit @param {number} offset */
+    onlimitoffsetchange = (limit, offset) => {},
     onsearchchange = () => {},
     onsortchange = () => {},
     onfilterschange = () => {},
@@ -71,8 +76,8 @@
       : `Delete ${formatCompactCount(selectedCount)} rows`,
   );
 
-  const from = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1);
-  const to = $derived(Math.min(page * pageSize, total));
+  const from = $derived(total === 0 ? 0 : offset + 1);
+  const to = $derived(Math.min(offset + pageSize, total));
   const pageCount = $derived(Math.max(1, Math.ceil(total / pageSize) || 1));
   const canPrev = $derived(page > 1);
   const canNext = $derived(page * pageSize < total);
@@ -87,6 +92,10 @@
   let filterMenuOpen = $state(false);
   let sortMenuOpen = $state(false);
   let columnsMenuOpen = $state(false);
+  let limitOffsetOpen = $state(false);
+  let draftLimit = $state(pageSize);
+  let draftOffset = $state(0);
+  let limitError = $state("");
 
   const hiddenCount = $derived(hiddenColumns.size);
 
@@ -532,15 +541,15 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
 
-    <button
+    <!-- <button
       type="button"
       class="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary px-2 text-ui-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40 md:px-2.5"
       disabled
       title="Add record (soon)"
     >
       <Plus class="size-3.5 shrink-0" />
-      <span class="hidden md:inline">Add record</span>
-    </button>
+      <span class="hidden md:inline">Add</span> -->
+    <!-- </button> -->
   </div>
 
   <!-- Right: perf + pagination -->
@@ -644,6 +653,107 @@
     >
       <RefreshCw class={cn("size-3.5", loading && "animate-spin")} />
     </button>
+
+    <DropdownMenu.Root
+      bind:open={limitOffsetOpen}
+      onOpenChange={(open) => {
+        if (open) {
+          draftLimit = pageSize;
+          draftOffset = offset;
+        }
+      }}
+    >
+      <DropdownMenu.Trigger
+        class={cn(iconBtn, limitOffsetOpen && "bg-accent text-foreground")}
+        title="Custom limit & offset"
+        aria-label="Custom limit & offset"
+        disabled={loading || total === 0}
+      >
+        <SlidersHorizontal class="size-3.5" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="w-52 p-0 text-ui-sm">
+        <div class="border-b border-border px-3 py-2.5">
+          <p class="font-medium text-foreground">Jump to offset</p>
+          <p class="mt-0.5 text-ui-xs leading-snug text-muted-foreground">
+            Set an exact SQL <code class="font-mono">LIMIT</code> and
+            <code class="font-mono">OFFSET</code>
+          </p>
+        </div>
+        <div class="flex flex-col gap-3 p-3">
+          <label class="flex flex-col gap-1">
+            <span class="text-ui-xs text-muted-foreground">
+              Limit (rows per page, max {MAX_PAGE_SIZE.toLocaleString()})
+            </span>
+            <Input
+              class={cn(
+                "h-7 font-mono text-ui-sm",
+                limitError &&
+                  "border-destructive focus-visible:ring-destructive/30",
+              )}
+              type="number"
+              min="1"
+              max={MAX_PAGE_SIZE}
+              value={draftLimit}
+              oninput={(e) => {
+                const v = Math.max(1, Number(e.currentTarget.value) || 1);
+                draftLimit = v;
+                limitError =
+                  v > MAX_PAGE_SIZE
+                    ? `Maximum is ${MAX_PAGE_SIZE.toLocaleString()} rows`
+                    : "";
+              }}
+            />
+            {#if limitError}
+              <p class="text-ui-xs text-destructive">{limitError}</p>
+            {/if}
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-ui-xs text-muted-foreground"
+              >Offset (skip rows)</span
+            >
+            <Input
+              class="h-7 font-mono text-ui-sm"
+              type="number"
+              min="0"
+              value={draftOffset}
+              oninput={(e) => {
+                draftOffset = Math.max(0, Number(e.currentTarget.value) || 0);
+              }}
+            />
+          </label>
+          <div class="flex gap-1.5">
+            <button
+              type="button"
+              class="inline-flex flex-1 h-7 items-center justify-center rounded-md border border-border text-ui-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+              onclick={() => {
+                limitOffsetOpen = false;
+                limitError = "";
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="inline-flex flex-1 h-7 items-center justify-center rounded-md bg-primary text-ui-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:pointer-events-none"
+              disabled={!!limitError || draftLimit < 1}
+              onclick={() => {
+                const l = Math.max(1, Math.floor(draftLimit));
+                const o = Math.max(0, Math.floor(draftOffset));
+                if (l > MAX_PAGE_SIZE) {
+                  limitError = `Maximum is ${MAX_PAGE_SIZE.toLocaleString()} rows`;
+                  return;
+                }
+                onlimitoffsetchange(l, o);
+                limitOffsetOpen = false;
+                limitError = "";
+              }}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
 
     <DropdownMenu.Root>
       <DropdownMenu.Trigger

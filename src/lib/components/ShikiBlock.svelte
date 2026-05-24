@@ -9,6 +9,8 @@
     linkifyJsonInElement,
     selectTextOffsets,
   } from '$lib/json-inspector.js'
+  import Copy from '@lucide/svelte/icons/copy'
+  import Check from '@lucide/svelte/icons/check'
 
   let {
     code = '',
@@ -22,8 +24,15 @@
 
   let html = $state('')
   let loading = $state(false)
+  let copied = $state(false)
   /** @type {HTMLDivElement | null} */
   let rootEl = $state(null)
+
+  async function copyCode() {
+    await navigator.clipboard.writeText(code ?? '').catch(() => {})
+    copied = true
+    setTimeout(() => { copied = false }, 1500)
+  }
 
   const appTheme = $derived(mode.current === 'light' ? 'light' : 'dark')
   const isJsonInteractive = $derived(jsonInteractive && lang === 'json')
@@ -107,11 +116,25 @@
   class={cn(
     embedded
       ? 'shiki-block-embedded relative overflow-x-auto bg-transparent'
-      : 'app-scroll relative min-h-0 flex-1 overflow-auto bg-panel',
+      : 'app-scroll group relative min-h-0 flex-1 overflow-auto bg-panel',
     className,
   )}
   ondblclick={handleDblClick}
 >
+  {#if !embedded}
+    <button
+      type="button"
+      onclick={copyCode}
+      class="absolute right-2 top-2 z-10 inline-flex size-6 items-center justify-center rounded border border-border bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 hover:text-foreground"
+      aria-label="Copy code"
+    >
+      {#if copied}
+        <Check class="size-3 text-green-500" />
+      {:else}
+        <Copy class="size-3" />
+      {/if}
+    </button>
+  {/if}
   {#if loading && !html}
     <p class="px-3 py-4 font-mono text-ui-sm text-muted-foreground">Highlighting…</p>
   {:else}

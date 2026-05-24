@@ -136,8 +136,22 @@ async fn close_existing(state: &State<'_, DbState>) {
 
 async fn open_pg(config: &PgConfig) -> Result<PgPool, String> {
     PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(std::time::Duration::from_secs(10))
+        // A single get_table_rows fires 6 queries; multiple open tabs multiply that.
+        // 20 connections comfortably handles 3–4 concurrent tab loads in parallel.
+        .max_connections(20)
+        .min_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(30))
+        .idle_timeout(std::time::Duration::from_secs(600))
+        .max_lifetime(std::time::Duration::from_secs(1800))
+        // Kill runaway queries automatically so they don't pin connections forever.
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout = '30s'")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&config.connection_url())
         .await
         .map_err(|e| format!("Connection failed: {e}"))

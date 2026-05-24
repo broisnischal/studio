@@ -26,6 +26,7 @@
   import DataTable from '$lib/components/DataTable.svelte'
   import AiMarkdown from '$lib/components/AiMarkdown.svelte'
   import AiSqlBlock from '$lib/components/AiSqlBlock.svelte'
+  import ShikiBlock from '$lib/components/ShikiBlock.svelte'
   import {
     chatCompletionStream,
     MAX_AI_RETRIES,
@@ -101,14 +102,21 @@
 
   async function selectConversation(/** @type {string} */ id) {
     if (id === activeConvId) return
+    abortCurrentRequest()
     // Save current before switching
     await persistCurrent()
     const conv = convList.find((c) => c.id === id)
     if (!conv) return
     activeConvId = id
-    // Restore — filter out ephemeral items
+    // Restore — filter out ephemeral items (including any stuck streaming items)
     items = /** @type {ChatItem[]} */ (
-      (conv.items ?? []).filter((i) => /** @type {any} */ (i).kind !== 'thinking' && /** @type {any} */ (i).kind !== 'confirm')
+      (conv.items ?? []).filter(
+        (i) =>
+          /** @type {any} */ (i).kind !== 'thinking' &&
+          /** @type {any} */ (i).kind !== 'confirm' &&
+          /** @type {any} */ (i).kind !== 'streaming' &&
+          /** @type {any} */ (i).kind !== 'executing',
+      )
     )
     apiHistory = /** @type {import('$lib/ai.js').ApiMessage[]} */ (conv.apiHistory ?? [])
     error = ''
@@ -116,11 +124,14 @@
   }
 
   async function newConversation() {
+    abortCurrentRequest()
     await persistCurrent()
     activeConvId = null
     items = []
     apiHistory = []
     error = ''
+    await tick()
+    inputRef?.focus()
   }
 
   async function removeConversation(/** @type {string} */ id) {
@@ -140,7 +151,8 @@
   let contextMenu = $state(null)
 
   function showContextMenu(/** @type {string} */ id, /** @type {MouseEvent} */ e) {
-    e.stopPropagation() // already prevented by global handler; just stop bubbling
+    e.preventDefault()
+    e.stopPropagation()
     contextMenu = { id, x: e.clientX, y: e.clientY }
   }
 
@@ -181,6 +193,7 @@
   // ── Platform ───────────────────────────────────────────────────────────────
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform)
   const modKey = isMac ? '⌘' : 'Ctrl'
+  const newChatShortcut = $derived(`${modKey}⇧T`)
 
   // ── Chat state ─────────────────────────────────────────────────────────────
   /** @type {ChatItem[]} */
@@ -192,6 +205,7 @@
   /** Shown on the thinking row while waiting on rate-limit retries */
   let aiStatusHint = $state('')
   let inputText = $state('')
+  const isDraftChat = $derived(!activeConvId && items.length > 0)
   /** Tracks all (name:args) combos executed this turn — prevents exact duplicate calls */
   let executedCalls = new Set()
   /** Tracks (name:args) combos that failed this turn — prevents retrying the same broken call */
@@ -218,6 +232,18 @@
 
   function stop() {
     abortController?.abort()
+  }
+
+  function abortCurrentRequest() {
+    if (abortController) {
+      abortController.abort()
+      abortController = null
+    }
+    loading = false
+    streamingId = null
+    streamingContent = ''
+    // Remove in-flight ephemeral items so the UI doesn't show a frozen state
+    items = items.filter((i) => i.kind !== 'thinking' && i.kind !== 'executing' && i.kind !== 'streaming')
   }
 
   // ── Mermaid ───────────────────────────────────────────────────────────────
@@ -862,9 +888,16 @@
 
   /** @param {KeyboardEvent} e */
   function handleGlobalKey(e) {
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'B') {
+    if (!isActive) return
+    const mod = e.ctrlKey || e.metaKey
+    if (!mod || !e.shiftKey) return
+    const key = e.key.toLowerCase()
+    if (key === 'b') {
       e.preventDefault()
       toggleAiSidebar()
+    } else if (key === 't') {
+      e.preventDefault()
+      void newConversation()
     }
   }
 
@@ -874,6 +907,7 @@
     const id = connectionId
     if (id === prevConnectionId) return
     prevConnectionId = id
+    abortCurrentRequest()
     activeConvId = null
     items = []
     apiHistory = []
@@ -896,28 +930,47 @@
 
       <!-- ── Conversation sidebar ───────────────────────────────────────── -->
       {#if sidebarVisible}
-      <aside class="flex w-48 shrink-0 flex-col border-r border-border bg-muted/20">
-        <div class="flex items-center justify-between gap-1 border-b border-border px-2 py-2">
-          <span class="text-xs font-medium text-muted-foreground">Chats</span>
+      <aside class="flex w-56 shrink-0 flex-col border-r border-border bg-panel">
+        <div class="flex flex-col gap-2 border-b border-border px-2.5 py-2.5">
+          <div class="flex items-center justify-between gap-2 px-0.5">
+            <span class="text-ui-xs font-semibold text-foreground">Chats</span>
+            <button
+              type="button"
+              class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+              title="Hide conversation list ({modKey}⇧B)"
+              onclick={toggleAiSidebar}
+            >
+              <PanelLeft class="size-3.5" />
+            </button>
+          </div>
           <button
             type="button"
-            class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="New conversation"
-            onclick={newConversation}
+            class="flex w-full items-center gap-2 rounded-md border border-border/80 bg-background px-2.5 py-2 text-left text-ui-xs text-foreground shadow-sm transition-colors hover:border-border hover:text-foreground"
+            title="New chat ({newChatShortcut})"
+            onclick={() => void newConversation()}
           >
-            <Plus class="size-3.5" />
+            <Plus class="size-3.5 shrink-0 text-muted-foreground" />
+            <span class="font-medium">New chat</span>
+            <kbd
+              class="ml-auto inline-flex h-5 items-center rounded border border-border bg-muted/60 px-1.5 font-mono text-[10px] text-muted-foreground"
+            >{newChatShortcut}</kbd>
           </button>
         </div>
 
-        <div class="app-scroll flex-1 overflow-y-auto py-1">
-          <!-- New / unsaved current chat -->
-          {#if items.length > 0 && !activeConvId}
+        <div class="app-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
+          {#if isDraftChat}
             <button
               type="button"
-              class="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent/60 bg-accent/40"
+              class={cn(
+                'group/chat relative flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
+                'bg-accent/45 ring-1 ring-border/60',
+              )}
             >
-              <span class="truncate text-xs font-medium text-foreground">New chat</span>
-              <span class="text-[10px] text-muted-foreground">unsaved</span>
+              <MessageSquare class="mt-0.5 size-3.5 shrink-0 text-primary" />
+              <div class="min-w-0 flex-1">
+                <span class="block truncate text-ui-xs font-medium text-foreground">New chat</span>
+                <span class="text-[10px] text-muted-foreground">Draft · unsaved</span>
+              </div>
             </button>
           {/if}
 
@@ -926,19 +979,37 @@
               <button
                 type="button"
                 class={cn(
-                  'flex min-w-0 flex-1 flex-col gap-0.5 rounded-md py-1.5 pl-2 pr-7 text-left hover:bg-accent/60',
-                  activeConvId === conv.id && 'bg-accent/40',
+                  'relative flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-colors hover:bg-accent/35',
+                  activeConvId === conv.id
+                    ? 'bg-accent/45 ring-1 ring-border/60'
+                    : 'text-muted-foreground hover:text-foreground',
                 )}
                 onclick={() => void selectConversation(conv.id)}
                 oncontextmenu={(e) => showContextMenu(conv.id, e)}
               >
-                <span class="truncate text-xs font-medium leading-snug text-foreground">{conv.title}</span>
-                <span class="text-[10px] text-muted-foreground">{relativeTime(conv.updatedAt)}</span>
+                {#if activeConvId === conv.id}
+                  <span
+                    class="absolute top-2 bottom-2 left-0 w-0.5 rounded-full bg-primary"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
+                <MessageSquare
+                  class={cn(
+                    'mt-0.5 size-3.5 shrink-0',
+                    activeConvId === conv.id ? 'text-primary' : 'text-muted-foreground/70',
+                  )}
+                />
+                <div class="min-w-0 flex-1">
+                  <span class="block truncate text-ui-xs font-medium leading-snug text-foreground">
+                    {conv.title}
+                  </span>
+                  <span class="text-[10px] text-muted-foreground">{relativeTime(conv.updatedAt)}</span>
+                </div>
               </button>
               <button
                 type="button"
-                class="absolute right-1 top-1/2 -translate-y-1/2 flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/20 hover:text-destructive group-hover:opacity-100"
-                title="Delete"
+                class="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,color] hover:text-destructive group-hover:opacity-100"
+                title="Delete conversation"
                 onclick={(e) => { e.stopPropagation(); void removeConversation(conv.id) }}
               >
                 <Trash2 class="size-3" />
@@ -946,10 +1017,16 @@
             </div>
           {/each}
 
-          {#if convList.length === 0 && items.length === 0}
-            <p class="px-3 py-4 text-center text-[10px] leading-relaxed text-muted-foreground/60">
-              Conversations are saved automatically
-            </p>
+          {#if convList.length === 0 && !isDraftChat}
+            <div class="flex flex-col items-center gap-2 px-3 py-8 text-center">
+              <MessageSquare class="size-7 text-muted-foreground/25" />
+              <p class="text-[11px] leading-relaxed text-muted-foreground/70">
+                No conversations yet
+              </p>
+              <p class="text-[10px] leading-relaxed text-muted-foreground/50">
+                Chats save automatically as you message
+              </p>
+            </div>
           {/if}
         </div>
       </aside>
@@ -963,14 +1040,25 @@
           <button
             type="button"
             class={cn(
-              'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+              'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground',
               !sidebarVisible && 'text-foreground',
             )}
-            title={sidebarVisible ? 'Hide conversation list' : 'Show conversation list'}
+            title={sidebarVisible ? `Hide chats (${modKey}⇧B)` : `Show chats (${modKey}⇧B)`}
             onclick={toggleAiSidebar}
           >
             <PanelLeft class="size-4" />
           </button>
+          {#if !sidebarVisible}
+            <button
+              type="button"
+              class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-background px-2 text-ui-xs text-muted-foreground transition-colors hover:text-foreground"
+              title="New chat ({newChatShortcut})"
+              onclick={() => void newConversation()}
+            >
+              <Plus class="size-3.5" />
+              New chat
+            </button>
+          {/if}
           <Bot class="size-4 shrink-0 text-primary" />
           <span class="text-sm font-semibold">AI Assistant</span>
           <span class="truncate font-mono text-xs text-muted-foreground">{settings.model}</span>
@@ -1117,7 +1205,7 @@
                             {@html processMermaidSvg(part.content)}
                           </div>
                         </div>
-                      {:else}
+                      {:else if part.type === 'sql'}
                         {@const sqlKey = `${item.id}-${pi}`}
                         {@const sqlOpen = !collapsed.has(sqlKey)}
                         <div class="overflow-hidden rounded-lg border border-border">
@@ -1143,6 +1231,29 @@
                             </div>
                           </div>
                           <AiSqlBlock sql={part.content} open={sqlOpen} />
+                        </div>
+                      {:else}
+                        {@const codeKey = `${item.id}-${pi}`}
+                        {@const codeOpen = !collapsed.has(codeKey)}
+                        <div class="overflow-hidden rounded-lg border border-border">
+                          <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/40 px-3 py-1.5">
+                            <button
+                              type="button"
+                              class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              onclick={() => toggleCollapse(codeKey)}
+                            >
+                              {#if codeOpen}<ChevronDown class="size-3" />{:else}<ChevronRight class="size-3" />{/if}
+                              <span class="font-mono">{part.lang || 'code'}</span>
+                            </button>
+                            <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)}>
+                              <Copy class="size-3" />Copy
+                            </button>
+                          </div>
+                          {#if codeOpen}
+                            <div class="border-t border-border/50 bg-muted/15">
+                              <ShikiBlock code={part.content} lang={part.lang || 'plaintext'} embedded />
+                            </div>
+                          {/if}
                         </div>
                       {/if}
                     {/each}

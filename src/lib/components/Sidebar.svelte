@@ -88,9 +88,9 @@
 
   // Section open/collapsed state
   let tablesOpen = $state(true)
-  let viewsOpen = $state(true)
-  let matViewsOpen = $state(true)
-  let indexesOpen = $state(true)
+  let viewsOpen = $state(false)
+  let matViewsOpen = $state(false)
+  let indexesOpen = $state(false)
 
   // Sync from parent when it resets externally (e.g. connection change)
   $effect(() => {

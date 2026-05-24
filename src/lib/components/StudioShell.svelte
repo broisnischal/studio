@@ -45,6 +45,7 @@
   import { formatCompactCount, normalizeTableRowCount } from '$lib/table-list.js'
   import {
     DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
     filtersApiSignature,
     filtersForApi,
     sortForApi,
@@ -132,6 +133,8 @@
   let loadingRows = $state(false)
   let page = $state(1)
   let pageSize = $state(DEFAULT_PAGE_SIZE)
+  let rawOffset = $state(/** @type {number | null} */ (null))
+  const currentOffset = $derived(rawOffset ?? (page - 1) * pageSize)
   let rowSearch = $state('')
   let rowSort = $state(/** @type {TableSort | null} */ (null))
   let rowFilters = $state(/** @type {TableFilter[]} */ ([]))
@@ -229,6 +232,8 @@
         })),
       ]),
     ),
+    /** @type {'postgres' | 'sqlite' | 'd1'} */
+    dbType: /** @type {any} */ (connection)?.type ?? 'postgres',
   }))
 
   const inspectorTarget = $derived.by(() => {
@@ -791,7 +796,7 @@
   }
 
   async function reloadTableFromQuery(resetPage = true) {
-    if (resetPage) page = 1
+    if (resetPage) { page = 1; rawOffset = null }
     await loadRows()
   }
 
@@ -799,6 +804,7 @@
   function handleRowSearchChange(value) {
     rowSearch = value
     page = 1
+    rawOffset = null
     void loadRows()
   }
 
@@ -826,13 +832,23 @@
   /** @param {number} size */
   async function handlePageSizeChange(size) {
     if (!Number.isFinite(size) || size <= 0) return
-    pageSize = size
+    pageSize = Math.min(size, MAX_PAGE_SIZE)
     await reloadTableFromQuery(true)
   }
 
   /** @param {number} nextPage */
   async function handlePageChange(nextPage) {
+    rawOffset = null
     page = nextPage
+    await loadRows()
+  }
+
+  /** @param {number} limit @param {number} offset */
+  async function handleLimitOffsetChange(limit, offset) {
+    const clampedLimit = Math.min(Math.max(1, limit), MAX_PAGE_SIZE)
+    pageSize = clampedLimit
+    rawOffset = offset
+    page = Math.max(1, Math.floor(offset / clampedLimit) + 1)
     await loadRows()
   }
 
@@ -958,7 +974,7 @@
     editingCell = null
     error = ''
     try {
-      const offset = (page - 1) * pageSize
+      const offset = currentOffset
       const { sortColumn, sortDirection } = sortForApi(rowSort)
       const data = await getTableRows(activeSchema, activeTable, pageSize, offset, {
         search: rowSearch,
@@ -1443,6 +1459,7 @@
             {queryMs}
             {page}
             {pageSize}
+            offset={currentOffset}
             {total}
             {columns}
             {rowSearch}
@@ -1459,6 +1476,7 @@
             onsortchange={(s) => void handleRowSortChange(s)}
             onpagesizechange={(s) => void handlePageSizeChange(s)}
             onpagechange={(p) => void handlePageChange(p)}
+            onlimitoffsetchange={(l, o) => void handleLimitOffsetChange(l, o)}
             ondeleteselected={() => void deleteSelectedRows()}
             onexport={handleExport}
             {hiddenColumns}

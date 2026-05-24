@@ -625,6 +625,8 @@ fn build_order_by(
     Ok(format!(" ORDER BY {col} {dir} NULLS LAST"))
 }
 
+const MAX_PAGE_LIMIT: i64 = 1000;
+
 pub async fn get_table_rows(
     state: State<'_, DbState>,
     schema: String,
@@ -636,6 +638,16 @@ pub async fn get_table_rows(
     sort_direction: Option<String>,
     filters: Option<Vec<RowFilter>>,
 ) -> Result<TableRows, String> {
+    if limit > MAX_PAGE_LIMIT {
+        return Err(format!("Limit {limit} exceeds the maximum of {MAX_PAGE_LIMIT} rows per page"));
+    }
+    if limit <= 0 {
+        return Err("Limit must be at least 1".to_string());
+    }
+    if offset < 0 {
+        return Err("Offset must be 0 or greater".to_string());
+    }
+
     match require_conn(&state)? {
         ActiveConnection::Sqlite(pool) => {
             return super::sqlite::get_table_rows(
@@ -670,10 +682,6 @@ pub async fn get_table_rows(
     for value in &where_clause.binds {
         count_query = count_query.bind(value.as_str());
     }
-    let total: i64 = count_query
-        .fetch_one(&pool)
-        .await
-        .map_err(|e| format!("Failed to count rows: {e}"))?;
 
     let limit_param = where_clause.binds.len() + 1;
     let offset_param = where_clause.binds.len() + 2;
@@ -687,10 +695,14 @@ pub async fn get_table_rows(
         data_query = data_query.bind(value.as_str());
     }
     data_query = data_query.bind(limit).bind(offset);
-    let rows = data_query
-        .fetch_all(&pool)
-        .await
-        .map_err(|e| format!("Failed to fetch rows: {e}"))?;
+
+    // COUNT and data SELECT are independent — run both in parallel.
+    let (total_result, rows_result) = tokio::join!(
+        count_query.fetch_one(&pool),
+        data_query.fetch_all(&pool),
+    );
+    let total: i64 = total_result.map_err(|e| format!("Failed to count rows: {e}"))?;
+    let rows = rows_result.map_err(|e| format!("Failed to fetch rows: {e}"))?;
 
     let mut columns: Vec<ColumnInfo> = if let Some(first) = rows.first() {
         first
@@ -723,20 +735,24 @@ pub async fn get_table_rows(
             .collect()
     };
 
-    if let Ok(enums) = fetch_table_column_enums(&pool, &schema, &table).await {
-        apply_column_enums(&mut columns, &enums);
-    }
-    if let Ok(nullable) = fetch_table_column_nullable(&pool, &schema, &table).await {
-        apply_column_nullable(&mut columns, &nullable);
-    }
-
+    // Build row data early so the borrow of `rows` doesn't outlive the join.
     let data: Vec<Vec<Value>> = rows
         .iter()
         .map(|row| (0..row.len()).map(|i| cell_to_json(row, i)).collect())
         .collect();
 
-    let primary_key = fetch_primary_key(&pool, &schema, &table).await?;
-    let foreign_keys = fetch_foreign_keys(&pool, &schema, &table).await?;
+    // All four metadata queries are independent — run them in parallel to halve
+    // the number of sequential round-trips and release connections faster.
+    let (enums_result, nullable_result, pk_result, fk_result) = tokio::join!(
+        fetch_table_column_enums(&pool, &schema, &table),
+        fetch_table_column_nullable(&pool, &schema, &table),
+        fetch_primary_key(&pool, &schema, &table),
+        fetch_foreign_keys(&pool, &schema, &table),
+    );
+    if let Ok(enums) = enums_result { apply_column_enums(&mut columns, &enums); }
+    if let Ok(nullable) = nullable_result { apply_column_nullable(&mut columns, &nullable); }
+    let primary_key = pk_result?;
+    let foreign_keys = fk_result?;
 
     Ok(TableRows {
         columns,

@@ -2,7 +2,7 @@
  * @typedef {{ role: 'system'|'user'|'assistant'|'tool', content: string|null, tool_calls?: ToolCall[], tool_call_id?: string }} ApiMessage
  * @typedef {{ id: string, type: 'function', function: { name: string, arguments: string } }} ToolCall
  * @typedef {{ baseUrl: string, apiKey: string, model: string }} AiSettings
- * @typedef {{ type: 'text', content: string } | { type: 'sql', content: string } | { type: 'mermaid', content: string }} AssistantPart
+ * @typedef {{ type: 'text', content: string } | { type: 'sql', content: string } | { type: 'code', lang: string, content: string } | { type: 'mermaid', content: string }} AssistantPart
  */
 
 import { formatCompactCount } from '$lib/table-list.js'
@@ -14,14 +14,14 @@ export const AI_TOOLS = [
     function: {
       name: 'execute_sql',
       description:
-        'Execute a SQL statement against the connected PostgreSQL database. ' +
+        'Execute a SQL statement against the connected database. ' +
         'For SELECT/WITH queries returns columns + rows. ' +
         'For INSERT/UPDATE/DELETE/DDL returns affected row count and a message. ' +
         'Always call this to fetch real data — never guess results.',
       parameters: {
         type: 'object',
         properties: {
-          sql: { type: 'string', description: 'Valid PostgreSQL SQL to execute.' },
+          sql: { type: 'string', description: 'Valid SQL to execute against the connected database.' },
         },
         required: ['sql'],
       },
@@ -277,6 +277,8 @@ export function isDestructiveSql(sql) {
  * @param {string} content
  * @returns {AssistantPart[]}
  */
+const SQL_LANGS = new Set(['sql', 'pgsql', 'postgresql', 'plpgsql', 'sqlite', 'tsql', 'mysql', 'mariadb'])
+
 export function parseAssistantMessage(content) {
   /** @type {AssistantPart[]} */
   const parts = []
@@ -293,8 +295,10 @@ export function parseAssistantMessage(content) {
     if (code) {
       if (lang === 'mermaid') {
         parts.push({ type: 'mermaid', content: code })
-      } else {
+      } else if (!lang || SQL_LANGS.has(lang)) {
         parts.push({ type: 'sql', content: code })
+      } else {
+        parts.push({ type: 'code', lang, content: code })
       }
     }
     lastIdx = match.index + match[0].length
@@ -305,7 +309,7 @@ export function parseAssistantMessage(content) {
 }
 
 /**
- * Build a comprehensive system prompt with schema context + PostgreSQL cheatsheet.
+ * Build a comprehensive system prompt with schema context + DB-type-specific cheatsheet.
  * @param {{
  *   schemas: string[],
  *   activeSchema: string,
@@ -365,8 +369,147 @@ export function buildSystemPrompt(ctx) {
     )
   })()
 
-  return `You are an expert PostgreSQL database assistant embedded in DB Studio, a database GUI client.
+  const dbType = ctx.dbType ?? 'postgres'
+
+  const DB_LABEL = {
+    postgres: 'PostgreSQL',
+    sqlite: 'SQLite',
+    d1: 'Cloudflare D1 (SQLite-compatible)',
+  }
+
+  const DB_NOTES = {
+    postgres: `Use standard PostgreSQL syntax. All PG features are available: CTEs, window functions, JSON/JSONB operators, pg_catalog, ILIKE, RETURNING, ON CONFLICT, etc.`,
+    sqlite: `Use SQLite syntax only. Important limitations: no RIGHT/FULL OUTER JOIN, no stored procedures, no ILIKE (use LIKE with LOWER()), limited ALTER TABLE (can only add columns), use strftime() for dates, INTEGER PRIMARY KEY is auto-increment (not SERIAL), ON CONFLICT is supported, no RETURNING in older SQLite builds. Do NOT use PostgreSQL-specific functions or operators.`,
+    d1: `Use SQLite-compatible SQL for Cloudflare D1. D1 is built on SQLite — do NOT use PostgreSQL syntax. Avoid ILIKE, SERIAL, pg_catalog, JSON operators (->>/->), window functions may be limited. Use strftime() for dates. D1 does not support triggers or stored procedures.`,
+  }
+
+  const ERD_QUERIES = {
+    postgres: `\`\`\`sql
+-- All columns
+SELECT table_name, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = '${ctx.activeSchema}'
+ORDER BY table_name, ordinal_position;
+
+-- All foreign keys
+SELECT kcu.table_name, kcu.column_name,
+       ccu.table_name AS ref_table, ccu.column_name AS ref_col
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+     ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema
+JOIN information_schema.constraint_column_usage ccu
+     ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema
+WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.constraint_schema = '${ctx.activeSchema}';
+\`\`\``,
+    sqlite: `\`\`\`sql
+-- All tables
+SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+\`\`\`
+Then for each table use \`describe_table\` or \`PRAGMA table_info('tablename')\` and \`PRAGMA foreign_key_list('tablename')\`.`,
+    d1: `\`\`\`sql
+-- All tables
+SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+\`\`\`
+Then for each table use \`describe_table\` or \`PRAGMA table_info('tablename')\` and \`PRAGMA foreign_key_list('tablename')\`.`,
+  }
+
+  const QUICK_REF = {
+    postgres: `## PostgreSQL Quick Reference
+
+### Common Patterns
+\`\`\`sql
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;
+SELECT * FROM users WHERE email ILIKE '%@gmail.com';
+SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY 2 DESC;
+INSERT INTO settings(key, value) VALUES ('theme', 'dark')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+\`\`\`
+
+### Window Functions
+\`\`\`sql
+WITH ranked AS (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+  FROM events
+) SELECT * FROM ranked WHERE rn = 1;
+\`\`\`
+
+### Useful Functions
+| Category | Functions |
+|---|---|
+| String | \`LOWER\`, \`UPPER\`, \`TRIM\`, \`SUBSTRING(s,1,10)\`, \`REPLACE\`, \`REGEXP_REPLACE\`, \`SPLIT_PART\`, \`CONCAT_WS\` |
+| Date/Time | \`NOW()\`, \`CURRENT_DATE\`, \`DATE_TRUNC('day',ts)\`, \`EXTRACT(epoch FROM ts)\`, \`AGE(ts)\`, \`TO_CHAR(ts,'YYYY-MM')\` |
+| Math | \`ROUND(x,2)\`, \`CEIL\`, \`FLOOR\`, \`ABS\`, \`RANDOM()\`, \`GENERATE_SERIES(1,10)\` |
+| JSON/JSONB | \`data->>'key'\`, \`data#>>'{a,b}'\`, \`jsonb_set(data,'{k}','"v"')\`, \`jsonb_array_elements\` |
+| Null | \`COALESCE(col,'default')\`, \`NULLIF(col,'')\`, \`IS DISTINCT FROM\` |
+
+### Schema Inspection
+\`\`\`sql
+SELECT table_name, pg_size_pretty(pg_total_relation_size(quote_ident(table_name)))
+FROM information_schema.tables WHERE table_schema = 'public' ORDER BY 1;
+\`\`\``,
+
+    sqlite: `## SQLite Quick Reference
+
+### Common Patterns
+\`\`\`sql
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;
+SELECT * FROM users WHERE LOWER(email) LIKE '%@gmail.com';
+SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY 2 DESC;
+INSERT OR REPLACE INTO settings(key, value) VALUES ('theme', 'dark');
+\`\`\`
+
+### Date & Time (strftime)
+\`\`\`sql
+SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) FROM orders GROUP BY 1;
+SELECT * FROM events WHERE created_at >= date('now', '-7 days');
+\`\`\`
+
+### Useful Functions
+| Category | Functions |
+|---|---|
+| String | \`LOWER\`, \`UPPER\`, \`TRIM\`, \`SUBSTR(s,1,10)\`, \`REPLACE\`, \`INSTR\`, \`GROUP_CONCAT\` |
+| Date | \`date('now')\`, \`strftime('%Y-%m-%d',col)\`, \`datetime('now','-1 day')\` |
+| Math | \`ROUND(x,2)\`, \`ABS\`, \`RANDOM()\` |
+| Null | \`COALESCE(col,'default')\`, \`NULLIF(col,'')\`, \`IFNULL(col,0)\` |
+
+### Schema Inspection
+\`\`\`sql
+SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name;
+PRAGMA table_info('tablename');
+PRAGMA foreign_key_list('tablename');
+PRAGMA index_list('tablename');
+\`\`\``,
+
+    d1: `## Cloudflare D1 Quick Reference
+
+### Common Patterns
+\`\`\`sql
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;
+SELECT * FROM users WHERE LOWER(email) LIKE '%@gmail.com';
+SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY 2 DESC;
+INSERT OR REPLACE INTO settings(key, value) VALUES ('theme', 'dark');
+\`\`\`
+
+### Date & Time
+\`\`\`sql
+SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) FROM orders GROUP BY 1;
+SELECT * FROM events WHERE created_at >= date('now', '-7 days');
+\`\`\`
+
+### Schema Inspection
+\`\`\`sql
+SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name;
+PRAGMA table_info('tablename');
+PRAGMA foreign_key_list('tablename');
+\`\`\``,
+  }
+
+  return `You are an expert ${DB_LABEL[dbType] ?? 'SQL'} database assistant embedded in DB Studio, a database GUI client.
 Your role: help users explore, query, and understand their database by executing real tool calls.
+
+## Database Engine
+${DB_LABEL[dbType] ?? dbType}
+${DB_NOTES[dbType] ?? ''}
 
 ## Connection
 Available schemas: ${ctx.schemas.length ? ctx.schemas.join(', ') : ctx.activeSchema}
@@ -389,93 +532,10 @@ ${otherTablesSection}
 6. **LIMIT is mandatory.** Every SELECT must include an explicit LIMIT. Tables can have millions of rows — omitting LIMIT will time out the query and crash the client. Use \`LIMIT 100\` for exploration, higher only when the user explicitly requests more data.
 7. If a tool call returns an error, do NOT retry the exact same query. Analyze the error, produce a corrected query, or explain to the user why it cannot be done.
 8. To visualize data or structure, output a \`\`\`mermaid code block — it will be rendered as an interactive diagram. Use \`erDiagram\` for entity-relationship / schema diagrams, \`flowchart TD\` for process flows, and \`xychart-beta\` for bar/line charts.
-9. For ERD / schema diagrams, fetch all column and FK data in two \`execute_sql\` calls rather than calling \`describe_table\` per table:
-\`\`\`sql
--- All columns
-SELECT table_name, column_name, data_type, is_nullable
-FROM information_schema.columns
-WHERE table_schema = '<schema>'
-ORDER BY table_name, ordinal_position;
-
--- All foreign keys
-SELECT kcu.table_name, kcu.column_name,
-       ccu.table_name AS ref_table, ccu.column_name AS ref_col
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-     ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema
-JOIN information_schema.constraint_column_usage ccu
-     ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema
-WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.constraint_schema = '<schema>';
-\`\`\`
+9. For ERD / schema diagrams, fetch schema data with:
+${ERD_QUERIES[dbType] ?? ERD_QUERIES.postgres}
 
 ---
 
-## PostgreSQL Quick Reference
-
-### Common Patterns
-\`\`\`sql
--- Latest N rows
-SELECT * FROM orders ORDER BY created_at DESC LIMIT 10;
-
--- Case-insensitive search
-SELECT * FROM users WHERE email ILIKE '%@gmail.com';
-
--- Count by category
-SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY 2 DESC;
-
--- Rows with no match (LEFT JOIN / NOT EXISTS)
-SELECT u.* FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE o.id IS NULL;
-
--- Upsert
-INSERT INTO settings(key, value) VALUES ('theme', 'dark')
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
-\`\`\`
-
-### Deduplication & Window Functions
-\`\`\`sql
--- Latest row per group
-WITH ranked AS (
-  SELECT *, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
-  FROM events
-)
-SELECT * FROM ranked WHERE rn = 1;
-
--- Running total
-SELECT date, amount, SUM(amount) OVER (ORDER BY date) AS running_total FROM sales;
-
--- Percentile rank
-SELECT name, salary, PERCENT_RANK() OVER (ORDER BY salary) FROM employees;
-\`\`\`
-
-### Useful Functions
-| Category | Functions |
-|---|---|
-| String | \`LOWER\`, \`UPPER\`, \`TRIM\`, \`SUBSTRING(s,1,10)\`, \`REPLACE\`, \`REGEXP_REPLACE\`, \`SPLIT_PART\`, \`CONCAT_WS\` |
-| Date/Time | \`NOW()\`, \`CURRENT_DATE\`, \`DATE_TRUNC('day',ts)\`, \`EXTRACT(epoch FROM ts)\`, \`AGE(ts)\`, \`TO_CHAR(ts,'YYYY-MM')\` |
-| Math | \`ROUND(x,2)\`, \`CEIL\`, \`FLOOR\`, \`ABS\`, \`RANDOM()\`, \`GENERATE_SERIES(1,10)\` |
-| JSON/JSONB | \`data->>'key'\`, \`data#>>'{a,b}'\`, \`jsonb_set(data,'{k}','"v"')\`, \`jsonb_array_elements\` |
-| Array | \`ANY(arr)\`, \`array_agg\`, \`unnest(arr)\`, \`ARRAY[1,2,3]\` |
-| Null | \`COALESCE(col,'default')\`, \`NULLIF(col,'')\`, \`IS DISTINCT FROM\` |
-
-### Schema Inspection
-\`\`\`sql
--- All tables in schema
-SELECT table_name, pg_size_pretty(pg_total_relation_size(quote_ident(table_name)))
-FROM information_schema.tables WHERE table_schema = 'public' ORDER BY 1;
-
--- Column types
-SELECT column_name, data_type, is_nullable FROM information_schema.columns
-WHERE table_schema = 'public' AND table_name = 'users' ORDER BY ordinal_position;
-
--- Foreign keys
-SELECT kcu.column_name, ccu.table_name, ccu.column_name AS ref_col
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu USING (constraint_name, constraint_schema)
-JOIN information_schema.constraint_column_usage ccu USING (constraint_name, constraint_schema)
-WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = 'orders';
-
--- Index sizes
-SELECT indexname, pg_size_pretty(pg_relation_size(indexname::regclass))
-FROM pg_indexes WHERE tablename = 'orders';
-\`\`\``
+${QUICK_REF[dbType] ?? QUICK_REF.postgres}`
 }

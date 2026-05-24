@@ -16,8 +16,9 @@
   --card-foreground: oklch(0.3 0.02 115);
   --popover: oklch(0.988 0.012 98);
   --popover-foreground: oklch(0.3 0.02 115);
-  --primary: oklch(0.28 0.03 145);
-  --primary-foreground: oklch(0.985 0.01 98);
+  /* Charcoal actions — same neutral primary as dark (no green tint) */
+  --primary: oklch(0.28 0 0);
+  --primary-foreground: oklch(0.98 0 0);
   --secondary: oklch(0.94 0.018 95);
   --secondary-foreground: oklch(0.32 0.02 115);
   --muted: oklch(0.94 0.018 95);
@@ -27,7 +28,7 @@
   --destructive: oklch(0.55 0.2 25);
   --border: oklch(0.87 0.022 92);
   --input: oklch(0.87 0.022 92);
-  --ring: oklch(0.62 0.04 145);
+  --ring: oklch(0.45 0 0);
   --sidebar: oklch(0.965 0.017 98);
   --sidebar-foreground: oklch(0.32 0.02 115);
   --sidebar-accent: oklch(0.91 0.02 95);
@@ -367,57 +368,61 @@
     }
   }
 
-  /*
-   * Windows (WebView2/Chromium): replace thick default scrollbars with thin,
-   * theme-matched bars. macOS keeps native overlay scrollbars unchanged.
-   */
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto) {
+  /* Minimal thin scrollbars — all platforms */
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto) {
     scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 38%, transparent) transparent;
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar {
-    width: 7px;
-    height: 7px;
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-track {
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb {
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb {
     background-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
-    border: 2px solid transparent;
     border-radius: 9999px;
-    background-clip: padding-box;
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb:hover {
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb:hover {
     background-color: color-mix(in oklch, var(--muted-foreground) 48%, transparent);
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb:active {
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-thumb:active {
     background-color: color-mix(in oklch, var(--muted-foreground) 58%, transparent);
   }
 
-  [data-os='windows'] :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-corner {
+  :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar-corner {
     background: transparent;
   }
 
-  /* bits-ui ScrollArea custom scrollbar — align with native styling on Windows */
-  [data-os='windows'] [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
-    width: 7px !important;
+  /* Tab bar: hide scrollbar — navigate via trackpad/wheel */
+  [role='tablist'] .app-scroll {
+    scrollbar-width: none;
   }
 
-  [data-os='windows'] [data-slot='scroll-area-scrollbar'][data-orientation='horizontal'] {
-    height: 7px !important;
+  [role='tablist'] .app-scroll::-webkit-scrollbar {
+    display: none;
   }
 
-  [data-os='windows'] [data-slot='scroll-area-thumb'] {
+  /* bits-ui ScrollArea custom scrollbar */
+  [data-slot='scroll-area-scrollbar'][data-orientation='vertical'] {
+    width: 4px !important;
+  }
+
+  [data-slot='scroll-area-scrollbar'][data-orientation='horizontal'] {
+    height: 4px !important;
+  }
+
+  [data-slot='scroll-area-thumb'] {
     background-color: color-mix(in oklch, var(--muted-foreground) 32%, transparent) !important;
   }
 
-  [data-os='windows'] [data-slot='scroll-area-scrollbar']:hover [data-slot='scroll-area-thumb'] {
+  [data-slot='scroll-area-scrollbar']:hover [data-slot='scroll-area-thumb'] {
     background-color: color-mix(in oklch, var(--muted-foreground) 48%, transparent) !important;
   }
 }

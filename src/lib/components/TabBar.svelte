@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte'
   import Table2 from '@lucide/svelte/icons/table-2'
   import Terminal from '@lucide/svelte/icons/terminal'
   import FileText from '@lucide/svelte/icons/file-text'
@@ -21,6 +22,17 @@
     onnew = () => {},
   } = $props()
 
+  /** @type {HTMLElement | null} */
+  let scrollEl = $state(null)
+
+  $effect(() => {
+    const _id = activeTabId
+    tick().then(() => {
+      const active = scrollEl?.querySelector('[aria-selected="true"]')
+      active?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+    })
+  })
+
   /** @param {StudioTab} tab */
   function tabIcon(tab) {
     if (tab.kind === 'sql') return Terminal
@@ -36,7 +48,7 @@
   role="tablist"
   aria-label="Open editors"
 >
-  <div class="app-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto">
+  <div bind:this={scrollEl} class="app-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto">
     {#each tabs as tab (tab.id)}
       {@const Icon = tabIcon(tab)}
       {@const active = tab.id === activeTabId}
@@ -99,17 +111,17 @@
           {/snippet}
         </ContextMenu.Trigger>
         <ContextMenu.Content class="w-44">
-          <ContextMenu.Item onclick={() => onclose(tab.id)}>
+          <ContextMenu.Item onSelect={() => onclose(tab.id)}>
             Close
           </ContextMenu.Item>
           <ContextMenu.Item
             disabled={tabs.length <= 1}
-            onclick={() => oncloseothers(tab.id)}
+            onSelect={() => oncloseothers(tab.id)}
           >
             Close Others
           </ContextMenu.Item>
           <ContextMenu.Separator />
-          <ContextMenu.Item onclick={oncloseall}>
+          <ContextMenu.Item onSelect={oncloseall}>
             Close All
           </ContextMenu.Item>
         </ContextMenu.Content>

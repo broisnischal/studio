@@ -55,6 +55,7 @@
         { keys: ['↵'], desc: 'Send message' },
         { keys: [shift, '↵'], desc: 'New line in message' },
         { keys: [mod, shift, 'B'], desc: 'Toggle conversation list' },
+        { keys: [mod, shift, 'T'], desc: 'New chat' },
       ],
     },
     {
