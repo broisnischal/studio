@@ -12,6 +12,8 @@
   import Keyboard    from '@lucide/svelte/icons/keyboard'
   import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right'
   import ArrowDownToLine from '@lucide/svelte/icons/arrow-down-to-line'
+  import History from '@lucide/svelte/icons/history'
+  import Bookmark from '@lucide/svelte/icons/bookmark'
   import * as Command from '$lib/components/ui/command/index.js'
   import { formatTableRowCount } from '$lib/table-list.js'
 
@@ -38,6 +40,13 @@
     oncheckupdate = () => {},
     /** @param {import('$lib/stores/connections.js').SavedConnection} conn */
     onswitchdatabase = (conn) => {},
+    /** @type {import('$lib/stores/query-history.js').QueryHistoryEntry[]} */
+    queryHistory = [],
+    /** @type {import('$lib/stores/query-history.js').SavedQuery[]} */
+    savedQueries = [],
+    /** @param {string} sql */
+    onqueryselect = (sql) => {},
+    onopenqueryhistory = () => {},
   } = $props()
 
   /** @param {'postgres'|'sqlite'|'d1'} type */
@@ -130,6 +139,46 @@
             <Command.Shortcut>⌘⇧A</Command.Shortcut>
           </Command.Item>
         </Command.Group>
+
+        <Command.Group heading="Queries">
+          <Command.Item
+            value="open query history sql statements"
+            onSelect={() => run(onopenqueryhistory)}
+          >
+            <History class="size-4 opacity-60" />
+            <span>Query history</span>
+          </Command.Item>
+        </Command.Group>
+
+        {#if savedQueries.length > 0}
+          <Command.Group heading="Saved queries">
+            {#each savedQueries as entry (entry.id)}
+              <Command.Item
+                value="saved query {entry.name} {entry.sql}"
+                class="gap-2"
+                onSelect={() => run(() => onqueryselect(entry.sql))}
+              >
+                <Bookmark class="size-4 shrink-0 opacity-60" />
+                <span class="min-w-0 truncate font-mono text-ui-xs">{entry.name}</span>
+              </Command.Item>
+            {/each}
+          </Command.Group>
+        {/if}
+
+        {#if queryHistory.length > 0}
+          <Command.Group heading="Recent queries">
+            {#each queryHistory.slice(0, 20) as entry (entry.id)}
+              <Command.Item
+                value="recent query {entry.title} {entry.sql}"
+                class="gap-2"
+                onSelect={() => run(() => onqueryselect(entry.sql))}
+              >
+                <History class="size-4 shrink-0 opacity-60" />
+                <span class="min-w-0 truncate font-mono text-ui-xs">{entry.title}</span>
+              </Command.Item>
+            {/each}
+          </Command.Group>
+        {/if}
 
         <Command.Group heading="Actions">
           <Command.Item value="refresh schema tables" onSelect={() => run(onrefresh)}>

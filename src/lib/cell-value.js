@@ -12,11 +12,65 @@ export function valueToEditString(value) {
 /**
  * @param {string} dataType
  */
-function normalizedType(dataType) {
+export function normalizeColumnType(dataType) {
   return String(dataType ?? '')
     .toLowerCase()
     .replace(/\(.+\)$/, '')
     .trim()
+}
+
+/** @param {string} dataType */
+function normalizedType(dataType) {
+  return normalizeColumnType(dataType)
+}
+
+/** @param {string} dataType */
+export function isDateTimeType(dataType) {
+  const t = normalizedType(dataType)
+  return (
+    t.includes('timestamp') ||
+    t === 'datetime' ||
+    t === 'timestamptz' ||
+    (t.includes('date') && t.includes('time'))
+  )
+}
+
+/** @param {string} dataType */
+export function isDateOnlyType(dataType) {
+  return normalizedType(dataType) === 'date'
+}
+
+/** @param {string} dataType */
+export function isTimeOnlyType(dataType) {
+  const t = normalizedType(dataType)
+  return (t === 'time' || t === 'timetz') && !t.includes('stamp')
+}
+
+/** @param {number} n */
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+
+/** @param {string} raw */
+export function formatTimestampForDb(raw) {
+  const trimmed = raw.trim()
+  if (!trimmed) return trimmed
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+    return `${trimmed.replace('T', ' ')}:00`
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed)) {
+    return trimmed.replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '')
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed
+  }
+  const parsed = Date.parse(trimmed)
+  if (!Number.isNaN(parsed)) {
+    const d = new Date(parsed)
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  }
+  return trimmed
 }
 
 /**
@@ -139,5 +193,78 @@ export function parseCellInput(raw, dataType, enumValues = null) {
     return { ok: true, value: trimmed }
   }
 
+  if (isDateTimeType(dataType)) {
+    return { ok: true, value: formatTimestampForDb(trimmed) }
+  }
+
+  if (isDateOnlyType(dataType)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return { ok: false, message: `Invalid date: "${raw}" (use YYYY-MM-DD)` }
+    }
+    return { ok: true, value: trimmed }
+  }
+
+  if (isTimeOnlyType(dataType)) {
+    if (!/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+      return { ok: false, message: `Invalid time: "${raw}" (use HH:MM)` }
+    }
+    return { ok: true, value: trimmed }
+  }
+
   return { ok: true, value: trimmed }
+}
+
+/**
+ * @param {string} dataType
+ * @param {string} columnName
+ * @param {string[]} primaryKey
+ */
+export function isLikelyAutoColumn(dataType, columnName, primaryKey) {
+  if (!primaryKey.includes(columnName)) return false
+  const t = normalizedType(dataType)
+  return (
+    t.includes('serial') ||
+    t === 'bigserial' ||
+    t === 'smallserial' ||
+    (t.includes('int') && columnName.toLowerCase() === 'id')
+  )
+}
+
+/**
+ * @param {{ name: string, dataType?: string, data_type?: string, nullable?: boolean, enumValues?: string[], enum_values?: string[] }[]} columns
+ * @param {string[]} primaryKey
+ * @param {Record<string, string>} drafts
+ * @returns {ParseResult & { values?: Record<string, unknown> }}
+ */
+export function buildInsertPayload(columns, primaryKey, drafts) {
+  /** @type {Record<string, unknown>} */
+  const values = {}
+
+  for (const col of columns) {
+    const dataType = col.dataType ?? col.data_type ?? 'text'
+    if (!isEditableType(dataType)) continue
+
+    const raw = drafts[col.name] ?? ''
+    const trimmed = raw.trim()
+
+    // Empty → omit column (DB default / auto). Required NOT NULL columns are validated in Rust.
+    if (trimmed === '') {
+      continue
+    }
+
+    const parsed = parseCellInput(trimmed, dataType, getColumnEnumValues(col))
+    if (!parsed.ok) {
+      return { ok: false, message: `${col.name}: ${parsed.message}` }
+    }
+    values[col.name] = parsed.value
+  }
+
+  if (Object.keys(values).length === 0) {
+    return {
+      ok: false,
+      message: 'Enter at least one column value (or leave auto columns empty)',
+    }
+  }
+
+  return { ok: true, value: null, values }
 }

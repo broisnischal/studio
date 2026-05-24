@@ -198,3 +198,21 @@ export async function deleteTableRows(schema, table, primaryKeys) {
     throw new Error(formatInvokeError(err))
   }
 }
+
+/**
+ * @param {string} schema
+ * @param {string} table
+ * @param {Record<string, unknown>} values
+ * @returns {Promise<{ row: unknown[] }>}
+ */
+export async function insertTableRow(schema, table, values) {
+  try {
+    return await invoke('pg_insert_table_row', {
+      schema,
+      table,
+      values,
+    })
+  } catch (err) {
+    throw new Error(formatInvokeError(err))
+  }
+}

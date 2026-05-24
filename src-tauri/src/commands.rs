@@ -28,10 +28,10 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
 
 use crate::db::{
     connect, connect_d1, connect_sqlite, disconnect,
-    delete_table_row, delete_table_rows, execute_sql, get_table_rows,
+    delete_table_row, delete_table_rows, execute_sql, get_table_rows, insert_table_row,
     list_schemas, list_tables, list_indexes, test_connection, test_d1_connection, test_sqlite_connection,
-    update_table_cell, ConnectionConfig, D1Config, DbState, IndexInfo, SqlResult, SqliteConfig, TableInfo,
-    TableRows,
+    update_table_cell, ConnectionConfig, D1Config, DbState, IndexInfo, InsertRowResult, SqlResult,
+    SqliteConfig, TableInfo, TableRows,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -173,4 +173,14 @@ pub async fn pg_delete_table_rows(
     primary_keys: Vec<HashMap<String, Value>>,
 ) -> Result<u64, String> {
     delete_table_rows(state, schema, table, primary_keys).await
+}
+
+#[tauri::command]
+pub async fn pg_insert_table_row(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    values: HashMap<String, Value>,
+) -> Result<InsertRowResult, String> {
+    insert_table_row(state, schema, table, values).await
 }

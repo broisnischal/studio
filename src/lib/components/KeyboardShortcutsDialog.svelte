@@ -36,6 +36,7 @@
         { keys: [mod, '↵'], desc: 'Run query' },
         { keys: [mod, 'S'], desc: 'Format SQL' },
         { keys: [mod, 'R'], desc: 'Refresh / re-run' },
+        { keys: [mod, 'K'], desc: 'Search query history' },
       ],
     },
     {

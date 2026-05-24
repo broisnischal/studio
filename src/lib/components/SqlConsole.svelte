@@ -6,7 +6,14 @@
   import CheckCheck from "@lucide/svelte/icons/check-check";
   import X from "@lucide/svelte/icons/x";
   import Loader2 from "@lucide/svelte/icons/loader-2";
+  import History from "@lucide/svelte/icons/history";
+  import Bookmark from "@lucide/svelte/icons/bookmark";
   import SqlEditor from "./SqlEditor.svelte";
+  import QueryHistoryPanel from "./QueryHistoryPanel.svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Label } from "$lib/components/ui/label/index.js";
+  import { queryTitle } from "$lib/stores/query-history.js";
   import DataTable from "./DataTable.svelte";
   import DataTableSkeleton from "./DataTableSkeleton.svelte";
   import ResizeHandle from "./ResizeHandle.svelte";
@@ -37,6 +44,16 @@
     onmodk = undefined,
     onmodenter = undefined,
     onmods = undefined,
+    queryHistoryVisible = $bindable(false),
+    /** @type {import('$lib/stores/query-history.js').QueryHistoryEntry[]} */
+    queryHistory = [],
+    /** @type {import('$lib/stores/query-history.js').SavedQuery[]} */
+    savedQueries = [],
+    onqueryrefresh = async () => {},
+    /** @param {string} sql */
+    onhistoryselect = (sql) => {},
+    /** @param {string} name @param {string} sql */
+    onsavequery = async (name, sql) => {},
   } = $props();
 
   let selected = $state(new Set());
@@ -47,6 +64,10 @@
   let resizeStartHeight = initialLayout.sqlEditorHeight;
   /** @type {(() => Promise<void>) | null} */
   let formatSql = $state(null);
+
+  let saveDialogOpen = $state(false);
+  let saveQueryName = $state('');
+  let savingQuery = $state(false);
 
   // AI fix state
   /** @type {'idle' | 'fixing' | 'done' | 'error'} */
@@ -147,9 +168,35 @@
   function clampEditorHeight(height) {
     return clampSqlEditorHeight(height, consoleEl?.clientHeight ?? 0);
   }
+
+  function openSaveDialog() {
+    saveQueryName = queryTitle(sql);
+    saveDialogOpen = true;
+  }
+
+  async function confirmSaveQuery() {
+    if (!sql.trim() || savingQuery) return;
+    savingQuery = true;
+    try {
+      await onsavequery(saveQueryName, sql);
+      saveDialogOpen = false;
+    } finally {
+      savingQuery = false;
+    }
+  }
 </script>
 
-<div bind:this={consoleEl} class="flex min-h-0 flex-1 flex-col">
+<div class="flex min-h-0 flex-1 overflow-hidden">
+  <QueryHistoryPanel
+    bind:visible={queryHistoryVisible}
+    history={queryHistory}
+    saved={savedQueries}
+    onselect={(text) => onhistoryselect(text)}
+    onrefresh={onqueryrefresh}
+    onclose={() => (queryHistoryVisible = false)}
+  />
+
+  <div bind:this={consoleEl} class="flex min-h-0 min-w-0 flex-1 flex-col">
   <div
     class="studio-chrome flex h-9 shrink-0 items-center gap-2 border-b border-border bg-panel px-3"
     data-studio-chrome
@@ -192,6 +239,31 @@
       >
         <Braces class="size-3.5 shrink-0" />
         <span class="text-ui-xs">Format</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        class={queryHistoryVisible
+          ? "h-7 gap-1.5 px-2 text-foreground"
+          : "h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"}
+        title="Query history"
+        onclick={() => (queryHistoryVisible = !queryHistoryVisible)}
+      >
+        <History class="size-3.5 shrink-0" />
+        <span class="text-ui-xs">History</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="h-7 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+        disabled={!sql.trim()}
+        title="Save query"
+        onclick={openSaveDialog}
+      >
+        <Bookmark class="size-3.5 shrink-0" />
+        <span class="text-ui-xs">Save</span>
       </Button>
     </div>
 
@@ -333,4 +405,41 @@
       </div>
     {/if}
   </div>
+  </div>
 </div>
+
+<Dialog.Root bind:open={saveDialogOpen}>
+  <Dialog.Content class="max-w-md gap-4">
+    <Dialog.Header>
+      <Dialog.Title class="text-sm font-semibold">Save query</Dialog.Title>
+      <Dialog.Description class="text-xs text-muted-foreground">
+        Saved queries are stored per connection and appear in History → Saved.
+      </Dialog.Description>
+    </Dialog.Header>
+    <div class="flex flex-col gap-2">
+      <Label for="save-query-name" class="text-ui-xs">Name</Label>
+      <Input
+        id="save-query-name"
+        bind:value={saveQueryName}
+        class="font-mono text-ui-sm"
+        placeholder="Query name"
+        onkeydown={(e) => {
+          if (e.key === 'Enter') void confirmSaveQuery()
+        }}
+      />
+    </div>
+    <Dialog.Footer class="gap-2 sm:justify-end">
+      <Button type="button" variant="outline" size="sm" onclick={() => (saveDialogOpen = false)}>
+        Cancel
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        disabled={!sql.trim() || savingQuery}
+        onclick={() => void confirmSaveQuery()}
+      >
+        {savingQuery ? 'Saving…' : 'Save'}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

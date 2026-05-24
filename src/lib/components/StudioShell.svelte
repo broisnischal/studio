@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { toast } from 'svelte-sonner'
@@ -16,6 +16,7 @@
   import KeyboardShortcutsDialog from './KeyboardShortcutsDialog.svelte'
   import InsiderDialog from './InsiderDialog.svelte'
   import UpdateDialog from './UpdateDialog.svelte'
+  import InsertRowDialog from './InsertRowDialog.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -26,6 +27,7 @@
     executeSql,
     updateTableCell,
     deleteTableRows,
+    insertTableRow,
     toggleDevtools,
   } from '$lib/api.js'
   import {
@@ -46,6 +48,7 @@
   import {
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
+    activeFilters,
     filtersApiSignature,
     filtersForApi,
     sortForApi,
@@ -73,6 +76,12 @@
     remapRowIndexSet,
   } from '$lib/table-row-indices.js'
   import { rowsToCsv, rowsToJson, saveExportFile, buildExportFilename } from '$lib/export.js'
+  import {
+    recordQueryExecution,
+    listQueryHistory,
+    listSavedQueries,
+    createSavedQuery,
+  } from '$lib/stores/query-history.js'
 
   /** @typedef {import('$lib/studio-tabs.js').StudioTab} StudioTab */
   /** @typedef {import('$lib/studio-tabs.js').TableTabState} TableTabState */
@@ -126,6 +135,8 @@
   let rows = $state([])
   let savingCell = $state(false)
   let deletingRows = $state(false)
+  let insertRowOpen = $state(false)
+  let insertingRow = $state(false)
   /** @type {{ rowIdx: number, colIdx: number, draft: string } | null} */
   let editingCell = $state(null)
   let total = $state(0)
@@ -138,14 +149,11 @@
   let rowSearch = $state('')
   let rowSort = $state(/** @type {TableSort | null} */ (null))
   let rowFilters = $state(/** @type {TableFilter[]} */ ([]))
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let searchDebounceTimer = null
   /** @type {{ focusRowSearch?: () => void } | null} */
   let tableToolbar = $state(null)
   /** @type {ReturnType<typeof setTimeout> | null} */
   let filterDebounceTimer = null
   onDestroy(() => {
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
     if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
   })
 
@@ -207,6 +215,50 @@
       : '',
   )
 
+  const persistConnectionId = $derived(activeConnectionId || connectionId)
+
+  const QUERY_HISTORY_OPEN_KEY = 'db-studio:query-history-open'
+  function loadQueryHistoryPref() {
+    try {
+      return localStorage.getItem(QUERY_HISTORY_OPEN_KEY) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  /** @type {import('$lib/stores/query-history.js').QueryHistoryEntry[]} */
+  let queryHistory = $state([])
+  /** @type {import('$lib/stores/query-history.js').SavedQuery[]} */
+  let savedQueries = $state([])
+  let queryHistoryVisible = $state(loadQueryHistoryPref())
+
+  async function refreshQueryStores() {
+    if (!persistConnectionId) {
+      queryHistory = []
+      savedQueries = []
+      return
+    }
+    const [history, saved] = await Promise.all([
+      listQueryHistory(persistConnectionId),
+      listSavedQueries(persistConnectionId),
+    ])
+    queryHistory = history
+    savedQueries = saved
+  }
+
+  $effect(() => {
+    queryHistoryVisible
+    try {
+      localStorage.setItem(QUERY_HISTORY_OPEN_KEY, queryHistoryVisible ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  })
+
+  $effect(() => {
+    if (commandOpen && persistConnectionId) void refreshQueryStores()
+  })
+
   const aiSchemaContext = $derived.by(() => ({
     schemas: [...schemas],
     activeSchema,
@@ -222,7 +274,7 @@
     foreignKeys: foreignKeys.map((fk) => ({ ...fk })),
     /** @type {Record<string, { name: string, dataType: string, nullable: boolean, enumValues?: string[] }[]>} */
     allTableColumns: Object.fromEntries(
-      [...tableColumnsCache.entries()].map(([key, cols]) => [
+      untrack(() => [...tableColumnsCache.entries()]).map(([key, cols]) => [
         key,
         cols.map((c) => ({
           name: c.name,
@@ -916,7 +968,6 @@
 
       // Update AI schema cache (LRU, capped)
       lruSet(tableColumnsCache, `${s.schema}.${s.table}`, result.columns)
-      tableColumnsCache = tableColumnsCache
 
       // Sync to global state only if this tab is still active
       if (tabId === activeTabId) {
@@ -985,7 +1036,6 @@
       columns = data.columns ?? []
       if (activeTable) {
         lruSet(tableColumnsCache, `${activeSchema}.${activeTable}`, columns)
-        tableColumnsCache = tableColumnsCache
       }
       primaryKey = data.primaryKey ?? data.primary_key ?? []
       foreignKeys = normalizeForeignKeys(data.foreignKeys ?? data.foreign_keys)
@@ -1025,8 +1075,9 @@
     sqlMessage = ''
     sqlColumns = []
     sqlRows = []
+    const sqlRan = sqlText
     try {
-      const data = await executeSql(sqlText)
+      const data = await executeSql(sqlRan)
       sqlColumns = data.columns ?? []
       sqlRows = data.rows ?? []
       sqlQueryMs = data.queryMs ?? data.query_ms ?? 0
@@ -1038,6 +1089,14 @@
       sqlError = String(e)
     } finally {
       sqlLoading = false
+      if (persistConnectionId) {
+        await recordQueryExecution(persistConnectionId, sqlRan, {
+          success: !sqlError,
+          queryMs: sqlQueryMs,
+          error: sqlError ? sqlError.slice(0, 200) : undefined,
+        })
+        await refreshQueryStores()
+      }
     }
   }
 
@@ -1063,6 +1122,7 @@
     } else {
       openWelcomeTab()
     }
+    await refreshQueryStores()
   }
 
   onMount(async () => {
@@ -1074,6 +1134,7 @@
       else if (last.type === 'd1') await connectD1(last)
       else await connectPostgres(last)
       await onConnected(last, last.id)
+      await refreshQueryStores()
     } catch {
       showConnectionModal = true
     } finally {
@@ -1222,6 +1283,41 @@
     }
   }
 
+  /** @param {Record<string, unknown>} values */
+  async function handleInsertRow(values) {
+    if (!activeTable) return
+
+    insertingRow = true
+    try {
+      const { row } = await insertTableRow(activeSchema, activeTable, values)
+      insertRowOpen = false
+
+      const hasActiveFilters =
+        rowSearch.trim() !== '' || activeFilters(rowFilters).length > 0
+
+      if (!hasActiveFilters && page === 1) {
+        rows = [row, ...rows]
+        if (rows.length > pageSize) {
+          rows = rows.slice(0, pageSize)
+        }
+        total += 1
+        saveActiveTabState()
+        toast.success('Row inserted')
+      } else {
+        await loadRows()
+        toast.success('Row inserted', {
+          description: hasActiveFilters
+            ? 'Refresh filters or go to page 1 if the row is not visible'
+            : undefined,
+        })
+      }
+    } catch (err) {
+      toast.error('Insert failed', { description: String(err) })
+    } finally {
+      insertingRow = false
+    }
+  }
+
   /** @param {{ rowIdx: number, colIdx: number, value: unknown }} detail */
   async function handleSaveCell(detail) {
     if (!activeTable || !primaryKey.length) return
@@ -1243,10 +1339,8 @@
     savingCell = true
     try {
       await updateTableCell(activeSchema, activeTable, pk, col.name, detail.value)
-      rows = rows.map((r, i) =>
-        i === detail.rowIdx
-          ? r.map((cell, j) => (j === detail.colIdx ? detail.value : cell))
-          : r,
+      rows[detail.rowIdx] = rows[detail.rowIdx].map(
+        (cell, j) => (j === detail.colIdx ? detail.value : cell),
       )
       saveActiveTabState()
     } finally {
@@ -1255,9 +1349,27 @@
   }
 
   /** Write SQL into the SQL editor and focus it. */
-  async function handleAiWriteSql(sql) {
+  /** @param {string} sql */
+  async function openQueryInEditor(sql) {
     await focusSqlView()
     sqlText = sql
+  }
+
+  async function openQueryHistory() {
+    await focusSqlView()
+    queryHistoryVisible = true
+  }
+
+  /** @param {string} name @param {string} sql */
+  async function handleSaveQuery(name, sql) {
+    if (!persistConnectionId) return
+    await createSavedQuery(persistConnectionId, name, sql)
+    await refreshQueryStores()
+    toast.success('Query saved')
+  }
+
+  async function handleAiWriteSql(sql) {
+    await openQueryInEditor(sql)
   }
 
   /** Run SQL from AI chat — writes to editor and executes. */
@@ -1309,6 +1421,15 @@
 
 <ConnectionModal bind:open={showConnectionModal} onconnected={(conn, id) => onConnected(conn, id)} />
 
+<InsertRowDialog
+  bind:open={insertRowOpen}
+  tableLabel={activeTable ? `${activeSchema}.${activeTable}` : ''}
+  {columns}
+  {primaryKey}
+  saving={insertingRow}
+  oninsert={handleInsertRow}
+/>
+
 <SettingsDialog bind:open={showSettingsModal} />
 
 <KeyboardShortcutsDialog bind:open={showShortcutsModal} />
@@ -1337,6 +1458,10 @@
   onopenshortcuts={() => (showShortcutsModal = true)}
   oncheckupdate={() => void updateDialog?.checkNow()}
   onswitchdatabase={handleSwitchDatabase}
+  {queryHistory}
+  {savedQueries}
+  onqueryselect={(sql) => void openQueryInEditor(sql)}
+  onopenqueryhistory={() => void openQueryHistory()}
 />
 
 {#if autoConnecting}
@@ -1423,6 +1548,9 @@
       {:else if activeTab?.kind === 'sql'}
         <SqlConsole
           bind:sql={sqlText}
+          bind:queryHistoryVisible
+          {queryHistory}
+          {savedQueries}
           columns={sqlColumns}
           rows={sqlRows}
           queryMs={sqlQueryMs}
@@ -1437,6 +1565,9 @@
           }}
           onmodenter={() => runSql()}
           onmods={() => saveActiveTabState()}
+          onqueryrefresh={refreshQueryStores}
+          onhistoryselect={(sql) => void openQueryInEditor(sql)}
+          onsavequery={handleSaveQuery}
         />
       {:else if activeTab?.kind === 'table'}
         {#if error}
@@ -1479,6 +1610,7 @@
             onlimitoffsetchange={(l, o) => void handleLimitOffsetChange(l, o)}
             ondeleteselected={() => void deleteSelectedRows()}
             onexport={handleExport}
+            onaddrow={() => (insertRowOpen = true)}
             {hiddenColumns}
             onhiddencolumnschange={(next) => { hiddenColumns = next }}
             onprev={async () => {
@@ -1500,7 +1632,7 @@
               {hiddenColumns}
               columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
               loading={loadingRows}
-              saving={savingCell || deletingRows}
+              saving={savingCell || deletingRows || insertingRow}
               bind:selected
               bind:focusedRow
               bind:inspectorRow

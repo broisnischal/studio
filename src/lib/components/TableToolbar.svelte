@@ -3,7 +3,7 @@
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
-  import History from "@lucide/svelte/icons/history";
+
   import ListFilter from "@lucide/svelte/icons/list-filter";
   import ArrowUpDown from "@lucide/svelte/icons/arrow-up-down";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
@@ -64,6 +64,7 @@
     ondeleteselected = () => {},
     /** @type {(format: 'csv' | 'json') => void | Promise<void>} */
     onexport = () => {},
+    onaddrow = () => {},
     /** @type {Set<string>} */
     hiddenColumns = new Set(),
     /** @type {(next: Set<string>) => void} */
@@ -236,10 +237,6 @@
       onclick={ontogglesidebar}
     >
       <PanelLeft class="size-3.5" />
-    </button>
-    <span class="mx-0.5 h-4 w-px bg-border"></span>
-    <button type="button" class={iconBtn} disabled title="History (soon)">
-      <History class="size-3.5" />
     </button>
   </div>
 
@@ -541,15 +538,16 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
 
-    <!-- <button
+    <button
       type="button"
       class="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary px-2 text-ui-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40 md:px-2.5"
-      disabled
-      title="Add record (soon)"
+      disabled={loading || columns.length === 0}
+      title="Insert row"
+      onclick={onaddrow}
     >
       <Plus class="size-3.5 shrink-0" />
-      <span class="hidden md:inline">Add</span> -->
-    <!-- </button> -->
+      <span class="hidden md:inline">Add</span>
+    </button>
   </div>
 
   <!-- Right: perf + pagination -->

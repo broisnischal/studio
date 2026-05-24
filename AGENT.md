@@ -99,6 +99,7 @@ AGENT.md                     # this file
 | `pg_update_table_cell` | Update one cell (requires primary key) |
 | `pg_delete_table_row` | Delete one row by primary key |
 | `pg_delete_table_rows` | Batch delete rows (`IN` or `VALUES` query) |
+| `pg_insert_table_row` | Insert one row (`RETURNING *`; Postgres / SQLite / D1) |
 
 ## Keyboard shortcuts
 
@@ -144,7 +145,7 @@ npm run dev          # Vite only — UI only, invokes will fail
 | Paginated table viewer | Done |
 | Theme (light/dark) + font size settings | Done |
 | SQL console | Placeholder |
-| Add row | Not started |
+| Add row | Done (toolbar Add → insert dialog) |
 | Edit / delete rows | Table grid + batch delete via toolbar ⋯ menu (⌘⌫) |
 | Filter / sort UI | Placeholder |
 | MySQL / SQLite / etc. | Not started |

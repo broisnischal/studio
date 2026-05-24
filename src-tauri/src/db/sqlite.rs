@@ -346,6 +346,118 @@ fn build_filter_condition(qcol: &str, op: &str, val: &str) -> (String, Vec<Strin
     }
 }
 
+// ── insert_table_row ──────────────────────────────────────────────────────────
+
+pub fn sqlite_column_optional_when_omitted(
+    notnull: bool,
+    dflt_value: Option<&str>,
+    pk: i64,
+    col_type: &str,
+) -> bool {
+    if dflt_value.is_some() {
+        return true;
+    }
+    let t = col_type.to_ascii_lowercase();
+    if t.contains("serial") || t.ends_with("serial") {
+        return true;
+    }
+    if pk > 0 && t.contains("int") {
+        return true;
+    }
+    !notnull
+}
+
+pub async fn insert_table_row(
+    pool: &SqlitePool,
+    table: &str,
+    values: std::collections::HashMap<String, Value>,
+) -> Result<Vec<Value>, String> {
+    let tq = format!("\"{}\"", table.replace('"', "\"\""));
+    let pragma_sql = format!("PRAGMA table_info({tq})");
+    let pragma_rows = sqlx::query(&pragma_sql)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("PRAGMA table_info: {e}"))?;
+
+    let mut column_order: Vec<String> = Vec::new();
+    let mut optional: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+
+    for r in &pragma_rows {
+        let name = r
+            .try_get::<Option<String>, _>(1)
+            .ok()
+            .flatten()
+            .ok_or("Invalid PRAGMA column name")?;
+        let col_type = r
+            .try_get::<Option<String>, _>(2)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "text".into());
+        let notnull: i64 = r.try_get(3).ok().unwrap_or(0);
+        let dflt: Option<String> = r.try_get(4).ok().flatten();
+        let pk: i64 = r.try_get(5).ok().unwrap_or(0);
+        let opt = sqlite_column_optional_when_omitted(notnull != 0, dflt.as_deref(), pk, &col_type);
+        column_order.push(name.clone());
+        optional.insert(name, opt);
+    }
+
+    for col in values.keys() {
+        if !optional.contains_key(col) {
+            return Err(format!("Unknown column: {col}"));
+        }
+    }
+
+    for (name, opt) in &optional {
+        if !opt && !values.contains_key(name) {
+            return Err(format!(
+                "Column \"{name}\" is required (NOT NULL, no default)"
+            ));
+        }
+    }
+
+    let mut col_names: Vec<String> = values.keys().cloned().collect();
+    col_names.sort();
+
+    let cols: Vec<String> = col_names
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+        .collect();
+    let placeholders: Vec<String> = (0..col_names.len()).map(|_| "?".to_string()).collect();
+    let sql = format!(
+        "INSERT INTO {tq} ({}) VALUES ({}) RETURNING *",
+        cols.join(", "),
+        placeholders.join(", ")
+    );
+
+    let mut q = sqlx::query(&sql);
+    for col in &col_names {
+        let v = values.get(col).ok_or_else(|| format!("Missing value for {col}"))?;
+        q = bind_value(q, v);
+    }
+
+    let inserted = q
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Insert failed: {e}"))?;
+
+    let returning_cols: Vec<String> = inserted
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
+
+    Ok(column_order
+        .iter()
+        .map(|name| {
+            let idx = returning_cols
+                .iter()
+                .position(|n| n == name)
+                .unwrap_or(0);
+            cell_to_json(&inserted, idx)
+        })
+        .collect())
+}
+
 // ── update_table_cell ─────────────────────────────────────────────────────────
 
 pub async fn update_table_cell(

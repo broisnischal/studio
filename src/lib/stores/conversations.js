@@ -1,8 +1,6 @@
-import { openDB } from 'idb'
+import { getStudioDb, STORES } from '$lib/stores/studio-db.js'
 
-const DB_NAME = 'db-studio'
-const DB_VERSION = 1
-const STORE = 'conversations'
+const STORE = STORES.conversations
 
 /**
  * @typedef {{
@@ -18,14 +16,7 @@ const STORE = 'conversations'
  */
 
 function getDb() {
-  return openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: 'id' })
-        store.createIndex('updatedAt', 'updatedAt')
-      }
-    },
-  })
+  return getStudioDb()
 }
 
 /**

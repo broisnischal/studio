@@ -372,6 +372,55 @@ impl PgColumnMeta {
         }
         Ok(format!(r#""{column}" = $1"#))
     }
+
+    fn insert_value_sql(&self, bind_idx: u32) -> Result<String, String> {
+        if self.data_type.eq_ignore_ascii_case("USER-DEFINED") {
+            let udt_name = self
+                .udt_name
+                .as_deref()
+                .ok_or_else(|| "Missing UDT name for insert".to_string())?;
+            let udt_schema = self.udt_schema.as_deref().unwrap_or("public");
+            let type_ref = pg_cast_type_ref(udt_schema, udt_name)?;
+            return Ok(format!("${bind_idx}::{type_ref}"));
+        }
+        Ok(format!("${bind_idx}"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertRowResult {
+    pub row: Vec<Value>,
+}
+
+struct PgInsertColumnMeta {
+    name: String,
+    data_type: String,
+    optional_when_omitted: bool,
+    pg: PgColumnMeta,
+}
+
+fn pg_column_optional_when_omitted(
+    nullable: bool,
+    column_default: Option<&str>,
+    is_identity: bool,
+    data_type: &str,
+) -> bool {
+    if is_identity {
+        return true;
+    }
+    if column_default.is_some() {
+        return true;
+    }
+    let t = normalize_pg_type(data_type);
+    if t == "serial" || t == "bigserial" || t == "smallserial" {
+        return true;
+    }
+    nullable
+}
+
+fn is_bytea_type(data_type: &str) -> bool {
+    normalize_pg_type(data_type).contains("bytea")
 }
 
 fn validate_typed_value(data_type: &str, value: &Value) -> Result<(), String> {
@@ -871,6 +920,161 @@ pub async fn update_table_cell(
     Ok(())
 }
 
+pub async fn insert_table_row(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    values: HashMap<String, Value>,
+) -> Result<InsertRowResult, String> {
+    if values.is_empty() {
+        return Err("Provide at least one column value".into());
+    }
+
+    match require_conn(&state)? {
+        ActiveConnection::Sqlite(pool) => {
+            let row = super::sqlite::insert_table_row(&pool, &table, values).await?;
+            return Ok(InsertRowResult { row });
+        }
+        ActiveConnection::D1(cfg) => {
+            let row = insert_table_row_d1(&cfg, &table, values).await?;
+            return Ok(InsertRowResult { row });
+        }
+        ActiveConnection::Postgres(_) => {}
+    }
+
+    let pool = require_pool(&state)?;
+    validate_ident(&schema)?;
+    validate_ident(&table)?;
+
+    let meta_rows = sqlx::query(
+        r#"
+        SELECT
+            column_name::text,
+            data_type::text,
+            is_nullable::text,
+            column_default::text,
+            is_identity::text,
+            udt_schema::text,
+            udt_name::text
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        ORDER BY ordinal_position
+        "#,
+    )
+    .bind(&schema)
+    .bind(&table)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("Failed to load column metadata: {e}"))?;
+
+    if meta_rows.is_empty() {
+        return Err(format!("Table not found: {schema}.{table}"));
+    }
+
+    let mut column_order: Vec<String> = Vec::new();
+    let mut insert_meta: HashMap<String, PgInsertColumnMeta> = HashMap::new();
+
+    for row in &meta_rows {
+        let name: String = row
+            .try_get(0)
+            .map_err(|e| format!("Invalid column name: {e}"))?;
+        let data_type: String = row.try_get(1).unwrap_or_else(|_| "text".into());
+        let is_nullable = row
+            .try_get::<String, _>(2)
+            .map(|s| s.eq_ignore_ascii_case("YES"))
+            .unwrap_or(true);
+        let column_default: Option<String> = row.try_get(3).ok();
+        let is_identity = row
+            .try_get::<String, _>(4)
+            .map(|s| s.eq_ignore_ascii_case("YES"))
+            .unwrap_or(false);
+        let optional =
+            pg_column_optional_when_omitted(is_nullable, column_default.as_deref(), is_identity, &data_type);
+
+        column_order.push(name.clone());
+        insert_meta.insert(
+            name.clone(),
+            PgInsertColumnMeta {
+                name,
+                data_type: data_type.clone(),
+                optional_when_omitted: optional,
+                pg: PgColumnMeta {
+                    data_type,
+                    udt_schema: row.try_get(5).ok(),
+                    udt_name: row.try_get(6).ok(),
+                },
+            },
+        );
+    }
+
+    let mut col_names: Vec<String> = values.keys().cloned().collect();
+    col_names.sort();
+
+    let mut insert_cols: Vec<String> = Vec::new();
+    let mut placeholders: Vec<String> = Vec::new();
+    let mut bind_idx = 1_u32;
+
+    for col_name in &col_names {
+        let value = values
+            .get(col_name)
+            .ok_or_else(|| format!("Missing value for column: {col_name}"))?;
+        let meta = insert_meta
+            .get(col_name)
+            .ok_or_else(|| format!("Unknown column: {col_name}"))?;
+        if is_bytea_type(&meta.data_type) {
+            return Err(format!("Cannot insert into bytea column: {col_name}"));
+        }
+        validate_typed_value(&meta.data_type, value)?;
+        validate_ident(col_name)?;
+        insert_cols.push(format!(r#""{col_name}""#));
+        placeholders.push(meta.pg.insert_value_sql(bind_idx)?);
+        bind_idx += 1;
+    }
+
+    for meta in insert_meta.values() {
+        if meta.optional_when_omitted {
+            continue;
+        }
+        if !values.contains_key(&meta.name) {
+            return Err(format!(
+                "Column \"{}\" is required (NOT NULL, no default)",
+                meta.name
+            ));
+        }
+    }
+
+    let cols_sql = insert_cols.join(", ");
+    let vals_sql = placeholders.join(", ");
+    let sql = format!(
+        r#"INSERT INTO "{schema}"."{table}" ({cols_sql}) VALUES ({vals_sql}) RETURNING *"#
+    );
+
+    let mut q = sqlx::query(&sql);
+    for col_name in &col_names {
+        let meta = insert_meta
+            .get(col_name)
+            .ok_or_else(|| format!("Unknown column: {col_name}"))?;
+        q = bind_typed_value(q, &meta.data_type, values.get(col_name).unwrap())?;
+    }
+
+    let inserted = q
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| format!("Insert failed: {e}"))?;
+
+    let mut row_out: Vec<Value> = Vec::with_capacity(column_order.len());
+    for col_name in &column_order {
+        let idx = inserted
+            .columns()
+            .iter()
+            .position(|c| c.name() == col_name.as_str())
+            .ok_or_else(|| format!("RETURNING missing column: {col_name}"))?;
+        row_out.push(cell_to_json(&inserted, idx));
+    }
+
+    Ok(InsertRowResult { row: row_out })
+}
+
 pub async fn delete_table_row(
     state: State<'_, DbState>,
     schema: String,
@@ -1321,6 +1525,93 @@ async fn update_table_cell_d1(
     }
     d1q(cfg, &sql, params).await?;
     Ok(())
+}
+
+async fn insert_table_row_d1(
+    cfg: &super::connection::D1Config,
+    table: &str,
+    values: HashMap<String, Value>,
+) -> Result<Vec<Value>, String> {
+    use super::d1::query as d1q;
+
+    let tq = format!("\"{}\"", table.replace('"', "\"\""));
+    let pragma = d1q(cfg, &format!("PRAGMA table_info({tq})"), vec![]).await?;
+    let name_idx = pragma.columns.iter().position(|c| c.name == "name").unwrap_or(1);
+    let type_idx = pragma.columns.iter().position(|c| c.name == "type").unwrap_or(2);
+    let notnull_idx = pragma.columns.iter().position(|c| c.name == "notnull").unwrap_or(3);
+    let dflt_idx = pragma.columns.iter().position(|c| c.name == "dflt_value").unwrap_or(4);
+    let pk_idx = pragma.columns.iter().position(|c| c.name == "pk").unwrap_or(5);
+
+    let mut column_order: Vec<String> = Vec::new();
+    let mut optional: HashMap<String, bool> = HashMap::new();
+
+    for r in &pragma.rows {
+        let name = r
+            .get(name_idx)
+            .and_then(|v| v.as_str())
+            .ok_or("Invalid PRAGMA row")?
+            .to_string();
+        let col_type = r
+            .get(type_idx)
+            .and_then(|v| v.as_str())
+            .unwrap_or("text");
+        let notnull = r.get(notnull_idx).and_then(|v| v.as_i64()).unwrap_or(0) != 0;
+        let dflt = r.get(dflt_idx).and_then(|v| v.as_str());
+        let pk = r.get(pk_idx).and_then(|v| v.as_i64()).unwrap_or(0);
+        let opt = super::sqlite::sqlite_column_optional_when_omitted(notnull, dflt, pk, col_type);
+        column_order.push(name.clone());
+        optional.insert(name, opt);
+    }
+
+    for col in values.keys() {
+        if !optional.contains_key(col) {
+            return Err(format!("Unknown column: {col}"));
+        }
+    }
+
+    for (name, &opt) in &optional {
+        if !opt && !values.contains_key(name) {
+            return Err(format!(
+                "Column \"{name}\" is required (NOT NULL, no default)"
+            ));
+        }
+    }
+
+    let mut col_names: Vec<String> = values.keys().cloned().collect();
+    col_names.sort();
+
+    let cols: Vec<String> = col_names
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+        .collect();
+    let placeholders: Vec<String> = (0..col_names.len()).map(|_| "?".to_string()).collect();
+    let sql = format!(
+        "INSERT INTO {tq} ({}) VALUES ({}) RETURNING *",
+        cols.join(", "),
+        placeholders.join(", ")
+    );
+
+    let params: Vec<Value> = col_names
+        .iter()
+        .map(|c| values.get(c).cloned().unwrap_or(Value::Null))
+        .collect();
+    let res = d1q(cfg, &sql, params).await?;
+    let row = res
+        .rows
+        .first()
+        .ok_or_else(|| "Insert succeeded but RETURNING returned no row".to_string())?;
+
+    Ok(column_order
+        .iter()
+        .map(|name| {
+            let idx = res
+                .columns
+                .iter()
+                .position(|c| c.name == *name)
+                .unwrap_or(0);
+            row.get(idx).cloned().unwrap_or(Value::Null)
+        })
+        .collect())
 }
 
 async fn delete_table_rows_d1(
