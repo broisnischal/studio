@@ -1,15 +1,24 @@
 mod commands;
 mod db;
+mod mcp;
 
-use db::DbState;
+use db::{ActiveConnection, DbState};
+use mcp::McpState;
+use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Create the shared connection Arc — both DbState and McpState point to the same lock.
+    let db_conn: Arc<Mutex<Option<ActiveConnection>>> = Arc::new(Mutex::new(None));
+    let db_state = DbState { conn: Arc::clone(&db_conn) };
+    let mcp_state = McpState::new(db_conn);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(DbState::default())
+        .manage(db_state)
+        .manage(mcp_state)
         .setup(|app| {
             let window = tauri::WebviewWindowBuilder::new(
                 app,
@@ -64,6 +73,9 @@ pub fn run() {
             commands::pg_delete_table_row,
             commands::pg_delete_table_rows,
             commands::pg_insert_table_row,
+            mcp::mcp_start,
+            mcp::mcp_stop,
+            mcp::mcp_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

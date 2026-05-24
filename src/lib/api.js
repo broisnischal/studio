@@ -216,3 +216,19 @@ export async function insertTableRow(schema, table, values) {
     throw new Error(formatInvokeError(err))
   }
 }
+
+// ── MCP Server ────────────────────────────────────────────────────────────────
+
+/** @returns {Promise<{ running: boolean, port: number, url: string, token: string }>} */
+export async function mcpStart() {
+  return inv('mcp_start')
+}
+
+export async function mcpStop() {
+  return inv('mcp_stop')
+}
+
+/** @returns {Promise<{ running: boolean, port: number, url: string, token: string }>} */
+export async function mcpStatus() {
+  return inv('mcp_status')
+}

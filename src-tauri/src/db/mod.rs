@@ -1,4 +1,4 @@
-mod connection;
+pub mod connection;
 pub mod d1;
 mod query;
 mod schema;
@@ -7,7 +7,7 @@ pub mod sqlite;
 pub use connection::{
     connect, connect_d1, connect_sqlite, disconnect,
     test_connection, test_d1_connection, test_sqlite_connection,
-    ConnectionConfig, D1Config, DbState, SqliteConfig,
+    ActiveConnection, ConnectionConfig, D1Config, DbState, SqliteConfig,
 };
 pub use query::{
     delete_table_row, delete_table_rows, execute_sql, get_table_rows, insert_table_row,

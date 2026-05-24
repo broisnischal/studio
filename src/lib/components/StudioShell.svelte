@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
+  import Server from '@lucide/svelte/icons/server'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { toast } from 'svelte-sonner'
   import Sidebar from './Sidebar.svelte'
@@ -17,6 +18,7 @@
   import InsiderDialog from './InsiderDialog.svelte'
   import UpdateDialog from './UpdateDialog.svelte'
   import InsertRowDialog from './InsertRowDialog.svelte'
+  import McpPanel from './McpPanel.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -29,6 +31,8 @@
     deleteTableRows,
     insertTableRow,
     toggleDevtools,
+    mcpStart,
+    mcpStop,
   } from '$lib/api.js'
   import {
     createTableTab,
@@ -137,6 +141,8 @@
   let deletingRows = $state(false)
   let insertRowOpen = $state(false)
   let insertingRow = $state(false)
+  let showMcpPanel = $state(false)
+  let mcpRunning = $state(false)
   /** @type {{ rowIdx: number, colIdx: number, draft: string } | null} */
   let editingCell = $state(null)
   let total = $state(0)
@@ -1123,6 +1129,10 @@
       openWelcomeTab()
     }
     await refreshQueryStores()
+    try {
+      const s = await mcpStart()
+      mcpRunning = s.running
+    } catch { /* ignore */ }
   }
 
   onMount(async () => {
@@ -1171,6 +1181,8 @@
     } catch {
       /* ignore */
     }
+    try { await mcpStop() } catch { /* ignore */ }
+    mcpRunning = false
     connection = null
     schemas = []
     tables = []
@@ -1430,6 +1442,8 @@
   oninsert={handleInsertRow}
 />
 
+<McpPanel bind:open={showMcpPanel} connected={!!connection} />
+
 <SettingsDialog bind:open={showSettingsModal} />
 
 <KeyboardShortcutsDialog bind:open={showShortcutsModal} />
@@ -1475,6 +1489,18 @@
       <p class="text-sm">Reconnecting…</p>
     </div>
   </div>
+{/if}
+
+{#if connection}
+  <button
+    type="button"
+    class="fixed bottom-4 left-4 z-30 flex items-center gap-1.5 rounded-full border border-border bg-panel px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
+    onclick={() => (showMcpPanel = true)}
+    title="MCP Server"
+  >
+    <Server class="size-3" />
+    MCP {mcpRunning ? '●' : '○'}
+  </button>
 {/if}
 
 <div class="flex h-full min-h-0 w-full overflow-hidden bg-background">

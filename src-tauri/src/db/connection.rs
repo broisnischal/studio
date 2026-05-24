@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{PgPool, SqlitePool};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
@@ -80,12 +80,12 @@ impl ActiveConnection {
 // ── DbState ───────────────────────────────────────────────────────────────────
 
 pub struct DbState {
-    pub conn: Mutex<Option<ActiveConnection>>,
+    pub conn: Arc<Mutex<Option<ActiveConnection>>>,
 }
 
 impl Default for DbState {
     fn default() -> Self {
-        Self { conn: Mutex::new(None) }
+        Self { conn: Arc::new(Mutex::new(None)) }
     }
 }
 
