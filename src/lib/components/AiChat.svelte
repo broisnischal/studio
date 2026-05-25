@@ -1455,7 +1455,7 @@
 <style>
   :global(.prose-ai) {
     font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-    font-size: 18px;
+    font-size: 0.875rem;
     line-height: 1.7;
     color: var(--foreground);
     word-break: break-word;

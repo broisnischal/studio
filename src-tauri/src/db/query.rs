@@ -635,6 +635,15 @@ fn build_filter_condition(
                 .conditions
                 .push(format!("{col}::text ILIKE {p} ESCAPE '\\'"));
         }
+        "between" => {
+            let raw = value.unwrap_or("");
+            let mut parts = raw.splitn(2, ',');
+            let from = parts.next().unwrap_or("").trim().to_string();
+            let to = parts.next().unwrap_or("").trim().to_string();
+            let p1 = builder.push_bind(from);
+            let p2 = builder.push_bind(to);
+            builder.conditions.push(format!("{col}::text >= {p1} AND {col}::text <= {p2}"));
+        }
         _ => return Err(format!("Unsupported filter operator: {op}")),
     }
     Ok(())

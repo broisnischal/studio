@@ -342,6 +342,12 @@ fn build_filter_condition(qcol: &str, op: &str, val: &str) -> (String, Vec<Strin
         "not_contains" => (format!("LOWER(CAST({qcol} AS TEXT)) NOT LIKE LOWER(?)"), vec![format!("%{val}%")]),
         "starts_with" => (format!("LOWER(CAST({qcol} AS TEXT)) LIKE LOWER(?)"), vec![format!("{val}%")]),
         "ends_with" => (format!("LOWER(CAST({qcol} AS TEXT)) LIKE LOWER(?)"), vec![format!("%{val}")]),
+        "between" => {
+            let mut parts = val.splitn(2, ',');
+            let from = parts.next().unwrap_or("").trim().to_string();
+            let to = parts.next().unwrap_or("").trim().to_string();
+            (format!("{qcol} >= ? AND {qcol} <= ?"), vec![from, to])
+        }
         _ => (format!("{qcol} = ?"), vec![val.to_string()]),
     }
 }

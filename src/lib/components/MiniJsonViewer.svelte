@@ -75,7 +75,7 @@
 
 <div
   class={cn(
-    "mini-json-viewer group/mini relative w-full min-w-0 max-w-[50vw] overflow-hidden rounded-md border border-border/70 bg-[var(--editor-surface)] shadow-sm",
+    "mini-json-viewer group/mini relative isolate w-full min-w-0 max-w-[50vw] overflow-hidden rounded-md border border-border/70 bg-[var(--editor-surface)] shadow-sm",
     className,
   )}
 >

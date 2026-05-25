@@ -6,6 +6,7 @@
   import Bot from '@lucide/svelte/icons/bot'
   import LayoutTemplate from '@lucide/svelte/icons/layout-template'
   import Code2 from '@lucide/svelte/icons/code-2'
+  import Eye from '@lucide/svelte/icons/eye'
   import X from '@lucide/svelte/icons/x'
   import Plus from '@lucide/svelte/icons/plus'
   import { cn } from '$lib/utils.js'
@@ -38,7 +39,11 @@
   /** @param {StudioTab} tab */
   function tabIcon(tab) {
     if (tab.kind === 'sql') return Terminal
-    if (tab.kind === 'table') return Table2
+    if (tab.kind === 'table') {
+      const entityKind = /** @type {any} */ (tab.state)?.tableKind
+      if (entityKind === 'view' || entityKind === 'materialized_view') return Eye
+      return Table2
+    }
     if (tab.kind === 'ai') return Bot
     if (tab.kind === 'schema') return LayoutTemplate
     if (tab.kind === 'orm') return Code2

@@ -60,6 +60,8 @@
         { keys: [mod, '⌫'], desc: 'Delete selected rows' },
         { keys: [mod, '←'], desc: 'Previous page' },
         { keys: [mod, '→'], desc: 'Next page' },
+        { keys: [mod, shift, '←'], desc: 'First page' },
+        { keys: [mod, shift, '→'], desc: 'Last page' },
       ],
     },
     {
@@ -85,6 +87,7 @@
       label: 'General',
       shortcuts: [
         { keys: ['?'], desc: 'Show keyboard shortcuts' },
+        { keys: [mod, ','], desc: 'Open settings' },
         { keys: ['Esc'], desc: 'Dismiss / close' },
         { keys: [mod, 'R'], desc: 'Refresh current view' },
         { keys: ['F11'], desc: 'Toggle fullscreen' },

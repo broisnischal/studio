@@ -119,7 +119,6 @@
 
   /** @param {string} href @param {'image'|'pdf'|'link'} type @param {DOMRect} rect */
   function showUrlPreview(href, type, rect) {
-    // Cancel any pending hide so moving back onto the cell keeps it open
     if (previewHideTimer) {
       clearTimeout(previewHideTimer);
       previewHideTimer = null;
@@ -134,7 +133,6 @@
     }, 350);
   }
 
-  /** Called when cursor leaves the cell — gives 250ms to move onto the tooltip */
   function scheduleHidePreview() {
     if (previewShowTimer) {
       clearTimeout(previewShowTimer);
@@ -147,7 +145,6 @@
     }, 250);
   }
 
-  /** Called when cursor enters the tooltip — cancels the pending hide */
   function cancelHidePreview() {
     if (previewHideTimer) {
       clearTimeout(previewHideTimer);
@@ -190,10 +187,18 @@
       rows[contextRowIdx]?.[contextColIdx] === undefined,
   );
 
+  const CELL_DISPLAY_LIMIT = 400
+
   function formatCell(value) {
     if (value === null || value === undefined) return "NULL";
     if (typeof value === "object") return JSON.stringify(value);
     return String(value);
+  }
+
+  /** Truncated version for DOM rendering — keeps long values out of the render tree */
+  function displayCell(value) {
+    const s = formatCell(value);
+    return s.length > CELL_DISPLAY_LIMIT ? s.slice(0, CELL_DISPLAY_LIMIT) + "…" : s;
   }
 
   function focusRow(rowIdx) {
@@ -201,11 +206,15 @@
     focusedRow = rowIdx;
   }
 
+  const fkByColumn = $derived(
+    Object.fromEntries(columns.map((c) => [c.name, findForeignKeyForColumn(foreignKeys, c.name)])),
+  );
+
   /** @param {number} rowIdx @param {number} colIdx */
   function foreignKeyForCell(rowIdx, colIdx) {
     const col = columns[colIdx];
     if (!col) return null;
-    return findForeignKeyForColumn(foreignKeys, col.name);
+    return fkByColumn[col.name] ?? null;
   }
 
   /**
@@ -216,6 +225,8 @@
    */
   function tryFollowForeignKey(rowIdx, colIdx, e, opts = {}) {
     if (!foreignKeyForCell(rowIdx, colIdx)) return false;
+    const cellValue = rows[rowIdx]?.[colIdx];
+    if (cellValue === null || cellValue === undefined) return false;
     if (opts.requireModifier && e && !(e.metaKey || e.ctrlKey || e.altKey))
       return false;
     if (e) {
@@ -478,7 +489,7 @@
     const isSelected = selected.has(idx);
     const isExpanded = isRowExpanded(idx);
     return cn(
-      "group/row outline-none transition-colors hover:bg-accent/25",
+      "group/row outline-none hover:bg-accent/25",
       isExpanded && "[&>td]:border-b-0",
       isSelected && "bg-accent/20",
       isFocused && !isSelected && "bg-accent/15",
@@ -722,7 +733,7 @@
                         <div class="studio-table-gutter-inner">
                           <span
                             class={cn(
-                              "studio-row-expand-icon inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color] hover:bg-accent/50 hover:text-foreground",
+                              "studio-row-expand-icon inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                               isRowExpanded(idx)
                                 ? "opacity-100"
                                 : "opacity-0 group-hover/row:opacity-100",
@@ -766,6 +777,8 @@
                         {@const colType = col?.dataType ?? col?.data_type ?? ""}
                         {@const enumValues = getColumnEnumValues(col)}
                         {@const cellFk = foreignKeyForCell(idx, colIdx)}
+                        {@const cellIsNull = row[colIdx] === null || row[colIdx] === undefined}
+                        {@const activeFk = cellFk && !cellIsNull}
                         <td
                           data-col-idx={colIdx}
                           class={cn(
@@ -773,7 +786,7 @@
                             isEditing
                               ? "relative p-0 align-middle ring-2 ring-inset ring-primary bg-background"
                               : "whitespace-nowrap px-3 py-0.5 text-muted-foreground",
-                            cellFk &&
+                            activeFk &&
                               !isEditing &&
                               "group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30",
                           )}
@@ -789,7 +802,7 @@
                           }}
                           ondblclick={(e) => {
                             e.preventDefault();
-                            if (cellFk) {
+                            if (activeFk) {
                               tryFollowForeignKey(idx, colIdx, e);
                               return;
                             }
@@ -887,16 +900,17 @@
                             {/if}
                           {:else}
                             {@const cellText = formatCell(cell)}
-                            {@const cellHref = !cellFk
+                            {@const cellDisplay = displayCell(cell)}
+                            {@const cellHref = !activeFk
                               ? cellLinkHref(cellText)
                               : null}
                             {@const urlType = cellUrlType(cellHref)}
                             <span
                               class={cn(
                                 "flex items-center gap-1.5 truncate",
-                                cellFk && "text-foreground",
+                                activeFk && "text-foreground",
                               )}
-                              title={cellFk
+                              title={activeFk
                                 ? `${cellText} — Ctrl/⌘-click or double-click to open ${foreignKeyTargetLabel(cellFk)}`
                                 : cellText}
                             >
@@ -935,12 +949,12 @@
                                   }}
                                   onmouseleave={scheduleHidePreview}
                                 >
-                                  {cellText}
+                                  {cellDisplay}
                                 </a>
                               {:else}
-                                <span class="truncate">{cellText}</span>
+                                <span class="truncate">{cellDisplay}</span>
                               {/if}
-                              {#if cellFk}
+                              {#if activeFk}
                                 <ExternalLink
                                   class="size-3 shrink-0 text-ring/80 transition-colors group-hover/fk:text-foreground"
                                   aria-hidden="true"
@@ -1016,7 +1030,7 @@
         <PanelRight />
         Open
       </ContextMenu.Item>
-      {#if menuForeignKey}
+      {#if menuForeignKey && !menuCellNull}
         <ContextMenu.Item
           onSelect={() =>
             runMenuAction(() =>
@@ -1038,7 +1052,7 @@
           runMenuAction(() => startEdit(contextRowIdx, contextColIdx))}
       >
         <Pencil />
-        Edit {menuColName}
+        Edit
         <ContextMenu.Shortcut>Enter</ContextMenu.Shortcut>
       </ContextMenu.Item>
       <ContextMenu.Item
@@ -1064,7 +1078,7 @@
           <Braces />
           {isRowExpanded(contextRowIdx)
             ? "Collapse row JSON"
-            : "Expand row JSON"}
+            : "Expand"}
         </ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />

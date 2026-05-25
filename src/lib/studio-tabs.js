@@ -7,6 +7,7 @@
 /** @typedef {object} TableTabState
  * @property {string} schema
  * @property {string | null} table
+ * @property {'table' | 'view' | 'materialized_view' | 'foreign_table'} [tableKind]
  * @property {number} page
  * @property {number} pageSize
  * @property {string} rowSearch
@@ -83,10 +84,12 @@ export function cloneSqlTabState(state) {
 }
 
 /** @returns {TableTabState} */
-export function createTableTabState(schema = 'public', table = null) {
+/** @param {string} [schema] @param {string | null} [table] @param {'table'|'view'|'materialized_view'|'foreign_table'} [tableKind] */
+export function createTableTabState(schema = 'public', table = null, tableKind = 'table') {
   return {
     schema,
     table,
+    tableKind,
     page: 1,
     pageSize: 50,
     rowSearch: '',
@@ -122,9 +125,9 @@ export function createSqlTabState(sqlText = 'SELECT 1;') {
   }
 }
 
-/** @param {string} [schema] @param {string | null} [table] */
-export function createTableTab(schema = 'public', table = null) {
-  const state = createTableTabState(schema, table)
+/** @param {string} [schema] @param {string | null} [table] @param {'table'|'view'|'materialized_view'|'foreign_table'} [tableKind] */
+export function createTableTab(schema = 'public', table = null, tableKind = 'table') {
+  const state = createTableTabState(schema, table, tableKind)
   return /** @type {StudioTab} */ ({
     id: nextTabId(),
     kind: 'table',

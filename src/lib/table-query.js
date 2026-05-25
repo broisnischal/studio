@@ -2,7 +2,7 @@
 
 /** @typedef {{ column: string, direction: SortDirection }} TableSort */
 
-/** @typedef {'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with' | 'is_null' | 'is_not_null'} FilterOp */
+/** @typedef {'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'not_contains' | 'starts_with' | 'ends_with' | 'is_null' | 'is_not_null' | 'between'} FilterOp */
 
 /** @typedef {{ id: string, column: string, op: FilterOp, value: string }} TableFilter */
 
@@ -23,9 +23,25 @@ export const FILTER_OPS = /** @type {{ value: FilterOp, label: string, needsValu
   { value: 'gte', label: 'greater or equal', needsValue: true },
   { value: 'lt', label: 'less than', needsValue: true },
   { value: 'lte', label: 'less or equal', needsValue: true },
+  { value: 'between', label: 'is between', needsValue: true },
   { value: 'is_null', label: 'is null', needsValue: false },
   { value: 'is_not_null', label: 'is not null', needsValue: false },
 ])
+
+/** Ops shown for boolean columns */
+export const BOOL_FILTER_OPS = FILTER_OPS.filter((o) =>
+  ['eq', 'neq', 'is_null', 'is_not_null'].includes(o.value),
+)
+
+/** Ops shown for date/timestamp columns */
+export const DATE_FILTER_OPS = FILTER_OPS.filter((o) =>
+  ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null'].includes(o.value),
+)
+
+/** Ops shown for numeric columns */
+export const NUM_FILTER_OPS = FILTER_OPS.filter((o) =>
+  ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'is_null', 'is_not_null'].includes(o.value),
+)
 
 let filterSeq = 0
 

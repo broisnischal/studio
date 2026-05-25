@@ -24,6 +24,9 @@
   import { cn } from "$lib/utils.js";
   import {
     FILTER_OPS,
+    BOOL_FILTER_OPS,
+    DATE_FILTER_OPS,
+    NUM_FILTER_OPS,
     MAX_PAGE_SIZE,
     PAGE_SIZE_OPTIONS,
     activeFilters,
@@ -157,6 +160,37 @@
   const filterOpTrigger =
     "h-7 w-[7.5rem] shrink-0 gap-1 px-2 text-ui-sm font-normal shadow-none";
 
+  /** @typedef {'text' | 'boolean' | 'date' | 'number'} ColKind */
+
+  /** @param {string} colName @returns {ColKind} */
+  function getColKind(colName) {
+    const col = columns.find((c) => c.name === colName)
+    const dt = (col?.dataType ?? col?.data_type ?? '').toLowerCase().replace(/\(.+\)$/, '').trim()
+    if (dt === 'boolean' || dt === 'bool') return 'boolean'
+    if (/^(date|timestamp|timestamptz|timetz|time)/.test(dt)) return 'date'
+    if (/^(int|integer|bigint|smallint|numeric|decimal|real|double|float|serial|money)/.test(dt)) return 'number'
+    return 'text'
+  }
+
+  /** @param {string} colName */
+  function opsForCol(colName) {
+    const kind = getColKind(colName)
+    if (kind === 'boolean') return BOOL_FILTER_OPS
+    if (kind === 'date') return DATE_FILTER_OPS
+    if (kind === 'number') return NUM_FILTER_OPS
+    return FILTER_OPS
+  }
+
+  /** Default op when a column is first chosen */
+  /** @param {string} colName @returns {import('$lib/table-query.js').FilterOp} */
+  function defaultOpForCol(colName) {
+    const kind = getColKind(colName)
+    if (kind === 'boolean') return 'eq'
+    if (kind === 'date') return 'gte'
+    if (kind === 'number') return 'eq'
+    return 'contains'
+  }
+
   /** @param {FilterOp} op */
   function filterOpLabel(op) {
     return FILTER_OPS.find((o) => o.value === op)?.label ?? op;
@@ -168,6 +202,14 @@
     if (!f) return true;
     return FILTER_OPS.find((o) => o.value === f.op)?.needsValue ?? true;
   }
+
+  // ── between helpers (value stored as "from,to") ──────────────────────────
+  /** @param {string} val */
+  function betweenFrom(val) { return val.split(',')[0] ?? '' }
+  /** @param {string} val */
+  function betweenTo(val) { return val.split(',')[1] ?? '' }
+  /** @param {string} from @param {string} to */
+  function betweenJoin(from, to) { return `${from},${to}` }
 
   /** @param {string} value */
   function handleSearchInput(value) {
@@ -188,7 +230,8 @@
 
   function addFilter() {
     const col = columns[0]?.name ?? "";
-    onfilterschange([...rowFilters, createFilter(col)]);
+    const op = col ? defaultOpForCol(col) : 'contains'
+    onfilterschange([...rowFilters, createFilter(col, op)]);
     filterMenuOpen = true;
   }
 
@@ -317,7 +360,7 @@
             Open a table to filter rows.
           </p>
         {:else}
-          <div class="max-h-72 overflow-y-auto p-2">
+          <div class="max-h-[22rem] overflow-y-auto p-2">
             {#if rowFilters.length === 0}
               <p class="px-2 py-6 text-center text-ui-xs text-muted-foreground">
                 No filters yet. Add a rule to narrow results.
@@ -325,30 +368,43 @@
             {:else}
               <ul class="flex flex-col gap-2">
                 {#each rowFilters as filter (filter.id)}
-                  <li
-                    class="flex items-start gap-1.5 rounded-lg border border-border/70 bg-muted/15 p-2"
-                  >
+                  {@const colKind = getColKind(filter.column)}
+                  {@const colOps = opsForCol(filter.column)}
+                  <li class="flex items-start gap-1.5 rounded-lg border border-border/60 bg-muted/20 p-2">
                     <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+
+                      <!-- column + op row -->
                       <div class="flex min-w-0 items-center gap-1.5">
                         <Select.Root
                           type="single"
                           value={filter.column}
                           onValueChange={(v) => {
-                            if (v) patchFilter(filter.id, { column: v });
+                            if (!v) return
+                            const newOps = opsForCol(v)
+                            const newOp = newOps.some((o) => o.value === filter.op)
+                              ? filter.op
+                              : defaultOpForCol(v)
+                            patchFilter(filter.id, { column: v, op: /** @type {FilterOp} */ (newOp), value: '' })
                           }}
                         >
-                          <Select.Trigger
-                            size="sm"
-                            class={filterSelectTrigger}
-                            title="Column"
-                          >
-                            <span class="truncate"
-                              >{filter.column || "Column"}</span
-                            >
+                          <Select.Trigger size="sm" class={filterSelectTrigger} title="Column">
+                            <span class="truncate">{filter.column || "Column"}</span>
                           </Select.Trigger>
                           <Select.Content class="max-h-56">
                             {#each columns as col (col.name)}
-                              <Select.Item value={col.name} label={col.name} />
+                              {@const kind = getColKind(col.name)}
+                              <Select.Item value={col.name} label={col.name}>
+                                <span class="flex min-w-0 items-center gap-2 w-full">
+                                  <span class="truncate">{col.name}</span>
+                                  <span class={cn(
+                                    "ml-auto shrink-0 rounded px-1 text-ui-3xs font-medium uppercase tracking-wide",
+                                    kind === 'boolean' && "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                                    kind === 'date' && "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+                                    kind === 'number' && "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+                                    kind === 'text' && "bg-muted text-muted-foreground",
+                                  )}>{kind}</span>
+                                </span>
+                              </Select.Item>
                             {/each}
                           </Select.Content>
                         </Select.Root>
@@ -357,49 +413,99 @@
                           type="single"
                           value={filter.op}
                           onValueChange={(v) => {
-                            if (v)
-                              patchFilter(filter.id, {
-                                op: /** @type {FilterOp} */ (v),
-                              });
+                            if (v) patchFilter(filter.id, { op: /** @type {FilterOp} */ (v), value: '' })
                           }}
                         >
-                          <Select.Trigger
-                            size="sm"
-                            class={filterOpTrigger}
-                            title="Condition"
-                          >
-                            <span class="truncate"
-                              >{filterOpLabel(filter.op)}</span
-                            >
+                          <Select.Trigger size="sm" class={filterOpTrigger} title="Condition">
+                            <span class="truncate">{filterOpLabel(filter.op)}</span>
                           </Select.Trigger>
                           <Select.Content class="max-h-56">
-                            {#each FILTER_OPS as op (op.value)}
+                            {#each colOps as op (op.value)}
                               <Select.Item value={op.value} label={op.label} />
                             {/each}
                           </Select.Content>
                         </Select.Root>
                       </div>
 
+                      <!-- type-aware value input -->
                       {#if filterNeedsValue(filter.id)}
-                        <Input
-                          class="h-7 border-input bg-input/30 text-ui-sm shadow-none"
-                          value={filter.value}
-                          placeholder="Value…"
-                          oninput={(e) =>
-                            patchFilter(filter.id, {
-                              value: e.currentTarget.value,
-                            })}
-                        />
+                        {#if colKind === 'boolean'}
+                          <div class="flex gap-1.5">
+                            {#each [{ label: 'True', value: 'true' }, { label: 'False', value: 'false' }] as opt (opt.value)}
+                              <button
+                                type="button"
+                                class={cn(
+                                  "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md border text-ui-sm transition-colors",
+                                  filter.value === opt.value
+                                    ? "border-primary bg-primary text-primary-foreground"
+                                    : "border-border bg-input/30 text-muted-foreground hover:bg-accent hover:text-foreground",
+                                )}
+                                onclick={() => patchFilter(filter.id, { value: opt.value })}
+                              >
+                                <span class={cn(
+                                  "size-2 rounded-full",
+                                  opt.value === 'true'
+                                    ? (filter.value === 'true' ? "bg-primary-foreground" : "bg-green-500")
+                                    : (filter.value === 'false' ? "bg-primary-foreground" : "bg-red-500"),
+                                )}></span>
+                                {opt.label}
+                              </button>
+                            {/each}
+                          </div>
+
+                        {:else if colKind === 'date'}
+                          {#if filter.op === 'between'}
+                            <div class="flex items-center gap-1.5">
+                              <input
+                                type="date"
+                                value={betweenFrom(filter.value)}
+                                class="h-7 flex-1 min-w-0 rounded-md border border-input bg-input/30 px-2 text-ui-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                                oninput={(e) => patchFilter(filter.id, { value: betweenJoin(e.currentTarget.value, betweenTo(filter.value)) })}
+                              />
+                              <span class="shrink-0 text-ui-xs text-muted-foreground">to</span>
+                              <input
+                                type="date"
+                                value={betweenTo(filter.value)}
+                                class="h-7 flex-1 min-w-0 rounded-md border border-input bg-input/30 px-2 text-ui-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                                oninput={(e) => patchFilter(filter.id, { value: betweenJoin(betweenFrom(filter.value), e.currentTarget.value) })}
+                              />
+                            </div>
+                          {:else}
+                            <input
+                              type="date"
+                              value={filter.value}
+                              class="h-7 w-full rounded-md border border-input bg-input/30 px-2 text-ui-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+                              oninput={(e) => patchFilter(filter.id, { value: e.currentTarget.value })}
+                            />
+                          {/if}
+
+                        {:else if colKind === 'number'}
+                          <Input
+                            type="number"
+                            class="h-7 border-input bg-input/30 text-ui-sm shadow-none"
+                            value={filter.value}
+                            placeholder="Value…"
+                            oninput={(e) => patchFilter(filter.id, { value: e.currentTarget.value })}
+                          />
+
+                        {:else}
+                          <Input
+                            class="h-7 border-input bg-input/30 text-ui-sm shadow-none"
+                            value={filter.value}
+                            placeholder="Value…"
+                            oninput={(e) => patchFilter(filter.id, { value: e.currentTarget.value })}
+                          />
+                        {/if}
                       {/if}
                     </div>
 
                     <button
                       type="button"
-                      class="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                       aria-label="Remove filter"
                       onclick={() => removeFilter(filter.id)}
                     >
-                      <X class="size-3.5" />
+                      <X class="size-3" />
                     </button>
                   </li>
                 {/each}

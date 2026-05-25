@@ -116,10 +116,30 @@
     null
   );
 
-  // Section open/collapsed state
-  let tablesOpen = $state(true);
-  let viewsOpen = $state(false);
-  let matViewsOpen = $state(false);
+  // Section open/collapsed state — persisted across sidebar toggles
+  const SIDEBAR_EXPAND_KEY = 'db-studio:sidebar-sections'
+  function loadSidebarSections() {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_EXPAND_KEY)
+      if (raw) return JSON.parse(raw)
+    } catch {}
+    return { tables: true, views: false, matViews: false }
+  }
+  function saveSidebarSection(key, value) {
+    try {
+      const current = loadSidebarSections()
+      localStorage.setItem(SIDEBAR_EXPAND_KEY, JSON.stringify({ ...current, [key]: value }))
+    } catch {}
+  }
+
+  const _initial = loadSidebarSections()
+  let tablesOpen = $state(_initial.tables ?? true);
+  let viewsOpen = $state(_initial.views ?? false);
+  let matViewsOpen = $state(_initial.matViews ?? false);
+
+  $effect(() => { saveSidebarSection('tables', tablesOpen) })
+  $effect(() => { saveSidebarSection('views', viewsOpen) })
+  $effect(() => { saveSidebarSection('matViews', matViewsOpen) })
 
   // Sync from parent when it resets externally (e.g. connection change)
   $effect(() => {

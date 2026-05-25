@@ -1,6 +1,11 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte'
   import Database from '@lucide/svelte/icons/database'
+  import Terminal from '@lucide/svelte/icons/terminal'
+  import Table2 from '@lucide/svelte/icons/table-2'
+  import Bot from '@lucide/svelte/icons/bot'
+  import LayoutTemplate from '@lucide/svelte/icons/layout-template'
+  import Command from '@lucide/svelte/icons/command'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { cycleTheme, restorePreviousTheme } from '$lib/stores/settings.js'
   import { toast } from 'svelte-sonner'
@@ -101,7 +106,7 @@
   /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
   /** @typedef {import('$lib/foreign-key-nav.js').ForeignKeyInfo} ForeignKeyInfo */
 
-  const SEARCH_DEBOUNCE_MS = 300
+  const SEARCH_DEBOUNCE_MS = 150
   const COLUMNS_CACHE_MAX = 60
 
   /** @param {Map<string, unknown>} map @param {string} key @param {unknown} value */
@@ -636,7 +641,7 @@
     /** @param {KeyboardEvent} e */
     function onPaginationKey(e) {
       const mod = e.ctrlKey || e.metaKey
-      if (!mod || e.shiftKey || e.altKey) return
+      if (!mod || e.altKey) return
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
       if (commandOpen || showConnectionModal || showSettingsModal) return
       if (activeTab?.kind !== 'table' || !activeTable) return
@@ -646,14 +651,28 @@
         el instanceof HTMLTextAreaElement ||
         (el instanceof HTMLElement && el.isContentEditable)
       ) return
-      if (e.key === 'ArrowLeft') {
-        if (page <= 1) return
-        e.preventDefault()
-        void handlePageChange(page - 1)
+      if (e.shiftKey) {
+        // Ctrl/Cmd+Shift+Left → first page, Ctrl/Cmd+Shift+Right → last page
+        if (e.key === 'ArrowLeft') {
+          if (page <= 1) return
+          e.preventDefault()
+          void handlePageChange(1)
+        } else {
+          const lastPage = Math.max(1, Math.ceil(total / pageSize))
+          if (page >= lastPage) return
+          e.preventDefault()
+          void handlePageChange(lastPage)
+        }
       } else {
-        if (page * pageSize >= total) return
-        e.preventDefault()
-        void handlePageChange(page + 1)
+        if (e.key === 'ArrowLeft') {
+          if (page <= 1) return
+          e.preventDefault()
+          void handlePageChange(page - 1)
+        } else {
+          if (page * pageSize >= total) return
+          e.preventDefault()
+          void handlePageChange(page + 1)
+        }
       }
     }
     document.addEventListener('keydown', onPaginationKey)
@@ -687,6 +706,12 @@
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     e.preventDefault()
     showShortcutsModal = true
+  })
+
+  createHotkey('Mod+,', (e) => {
+    if (commandOpen || showConnectionModal || showShortcutsModal) return
+    e.preventDefault()
+    showSettingsModal = !showSettingsModal
   })
 
   createHotkey('Mod+I', (e) => {
@@ -904,7 +929,8 @@
     }
     saveActiveTabState()
     dropWelcomeTabs()
-    const tab = createTableTab(schema, table)
+    const tableKind = tables.find((t) => t.name === table)?.kind ?? 'table'
+    const tab = createTableTab(schema, table, /** @type {any} */ (tableKind))
     // Pre-bake any filters/search into the tab state before fetching
     if (tab.state && filters) {
       /** @type {TableTabState} */ (tab.state).rowFilters = filters.map((f) => ({ ...f }))
@@ -1392,6 +1418,7 @@
   }
 
   async function handleRefresh() {
+    await loadSchemas()
     await loadTables()
     if (activeTab?.kind === 'table' && activeTable) {
       await loadRows()
@@ -1684,7 +1711,7 @@
       ontableselect={handleTableSelect}
       ontablefilter={(v) => (tableFilter = v)}
       onviewchange={handleSidebarViewChange}
-      onrefresh={loadTables}
+      onrefresh={handleRefresh}
       ondisconnect={handleDisconnect}
       onopensettings={() => (showSettingsModal = true)}
       onopencommand={() => (commandOpen = true)}
@@ -1744,7 +1771,7 @@
           {enums}
           {tables}
           loading={loadingTables}
-          onrefresh={async () => { await loadTables() }}
+          onrefresh={async () => { await loadSchemas(); await loadTables() }}
         />
       {:else if activeTab?.kind === 'orm'}
         <OrmRunner
@@ -1865,18 +1892,115 @@
           </div>
         {/if}
       {:else}
-        <div class="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-          <p class="font-mono text-ui text-muted-foreground">
-            Pick a table from the sidebar, open SQL from the sidebar, or press
-            <kbd class="rounded border border-border px-1 font-mono text-ui-xs">⌘T</kbd>
-            for a new tab
-          </p>
-          <p class="text-ui-xs text-muted-foreground">
-            <kbd class="rounded border border-border px-1 font-mono">⌘B</kbd> sidebar ·
-            <kbd class="rounded border border-border px-1 font-mono">⌘⇧D</kbd> data ·
-            <kbd class="rounded border border-border px-1 font-mono">⌘⇧S</kbd> SQL ·
-            <kbd class="rounded border border-border px-1 font-mono">⌘W</kbd> close tab
-          </p>
+        {@const isMac = navigator.platform.toUpperCase().includes('MAC')}
+        {@const mod = isMac ? '⌘' : 'Ctrl'}
+        <div class="flex flex-1 flex-col items-center justify-center gap-10 overflow-auto p-10">
+          <div class="flex flex-col items-center gap-1 text-center">
+            <p class="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/50">studio</p>
+            <h1 class="text-sm font-medium text-foreground/80">Where do you want to start?</h1>
+          </div>
+
+          <div class="grid w-full max-w-lg grid-cols-2 gap-2">
+            <button
+              onclick={openSqlTab}
+              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
+                  <Terminal size={13} />
+                </div>
+                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}T</kbd>
+              </div>
+              <div>
+                <p class="text-xs font-medium text-foreground/80">SQL Editor</p>
+                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Write and run queries</p>
+              </div>
+            </button>
+
+            <button
+              onclick={() => {
+                const first = tables[0]
+                if (first) openTableTab(activeSchema, first.name)
+              }}
+              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
+                  <Table2 size={13} />
+                </div>
+                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧D</kbd>
+              </div>
+              <div>
+                <p class="text-xs font-medium text-foreground/80">Browse Data</p>
+                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Explore tables and views</p>
+              </div>
+            </button>
+
+            <button
+              onclick={openAiTab}
+              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
+                  <Bot size={13} />
+                </div>
+                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧A</kbd>
+              </div>
+              <div>
+                <p class="text-xs font-medium text-foreground/80">AI Assistant</p>
+                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Ask questions in plain text</p>
+              </div>
+            </button>
+
+            <button
+              onclick={openSchemaTab}
+              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
+                  <LayoutTemplate size={13} />
+                </div>
+                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧E</kbd>
+              </div>
+              <div>
+                <p class="text-xs font-medium text-foreground/80">Schema Explorer</p>
+                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Visualize your database</p>
+              </div>
+            </button>
+          </div>
+
+          {#if tables.length > 0}
+            <div class="w-full max-w-lg">
+              <p class="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground/40">Tables</p>
+              <div class="flex flex-wrap gap-1.5">
+                {#each tables.slice(0, 12) as t}
+                  <button
+                    onclick={() => openTableTab(activeSchema, t.name)}
+                    class="rounded-md border border-border/50 bg-muted/20 px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground"
+                  >
+                    {t.name}
+                  </button>
+                {/each}
+                {#if tables.length > 12}
+                  <span class="rounded-md border border-border/30 px-2.5 py-1 font-mono text-[11px] text-muted-foreground/40">+{tables.length - 12} more</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
+          <div class="flex items-center gap-4">
+            <button
+              onclick={() => showShortcutsModal = true}
+              class="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+            >
+              <Command size={11} />
+              <span>keyboard shortcuts</span>
+            </button>
+            <span class="text-muted-foreground/20">·</span>
+            <span class="font-mono text-[11px] text-muted-foreground/30">{mod}B sidebar</span>
+            <span class="text-muted-foreground/20">·</span>
+            <span class="font-mono text-[11px] text-muted-foreground/30">{mod}W close tab</span>
+          </div>
         </div>
       {/if}
     {/if}
