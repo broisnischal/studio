@@ -298,10 +298,12 @@ jobs:
               # makepkg refuses to run as root; patch the check — safe in CI containers.
               sed -i "s/if (( EUID == 0 ))/if (( 0 ))/" /usr/bin/makepkg
 
-              # Set up stable Rust toolchain
+              # Set up stable Rust toolchain.
+              # The Arch rustup package does not create ~/.cargo/env (that is only
+              # produced by the rustup.rs installer script).  Export the bin path directly.
               rustup toolchain install stable --no-self-update
               rustup default stable
-              source "$HOME/.cargo/env"
+              export PATH="$HOME/.cargo/bin:$PATH"
 
               # node_modules were already installed on the host via "npm ci";
               # the workspace is bind-mounted so they are available here.
