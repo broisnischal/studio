@@ -9,6 +9,15 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WEBKIT_DISABLE_DMABUF_RENDERER: WebKitGTK's DMA-buf renderer composites
+    // text as GPU textures that get bilinearly sampled at fractional pixel
+    // offsets during scroll/zoom, producing the characteristic blur on Linux.
+    // Disabling it falls back to a software path that stays crisp.
+    #[cfg(target_os = "linux")]
+    // SAFETY: called before any threads are spawned.
+    unsafe {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     // Create the shared connection Arc — both DbState and McpState point to the same lock.
     let db_conn: Arc<Mutex<Option<ActiveConnection>>> = Arc::new(Mutex::new(None));
     let db_state = DbState { conn: Arc::clone(&db_conn) };

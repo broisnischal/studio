@@ -58,7 +58,11 @@
   html {
     font-size: var(--app-font-size);
     font-family: var(--font-sans);
-    @apply h-full antialiased;
+    @apply h-full;
+    /* antialiased (grayscale) blurs on WebKitGTK/Linux; auto uses the platform
+       renderer which stays sharp at all zoom levels and during scroll. */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
     /* optimizeLegibility causes blurry text during GPU-composited scroll in
        WebKit / WebView2 — the software rasterizer it enables doesn't align
        cleanly with compositor layer boundaries when rows scroll past the

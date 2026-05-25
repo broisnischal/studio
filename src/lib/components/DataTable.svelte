@@ -251,13 +251,16 @@
   function armMenuSelectGuard() {
     suppressMenuSelect = true;
     const release = () => {
-      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointerdown", release);
       window.removeEventListener("pointercancel", release);
-      setTimeout(() => {
-        suppressMenuSelect = false;
-      }, 0);
+      suppressMenuSelect = false;
     };
-    window.addEventListener("pointerup", release);
+    // pointerdown fires before click/pointerup, so the guard is always cleared
+    // before onSelect fires. On Linux, contextmenu fires on right-click pointerup,
+    // meaning armMenuSelectGuard runs after that pointerup has already passed —
+    // listening for pointerup would catch the menu item's own pointerup and the
+    // setTimeout(0) would still be pending when onSelect fired, blocking all items.
+    window.addEventListener("pointerdown", release);
     window.addEventListener("pointercancel", release);
   }
 
@@ -578,7 +581,7 @@
           {...props}
           tabindex={-1}
           class={cn(
-            "app-scroll relative overflow-auto bg-panel select-none [scrollbar-gutter:stable] [contain:content]",
+            "app-scroll relative overflow-auto bg-panel select-none [scrollbar-gutter:stable] [contain:layout] [will-change:scroll-position]",
             embedded ? "max-h-80" : "min-h-0 flex-1",
             resizingColName && "cursor-col-resize",
           )}

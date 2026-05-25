@@ -6,8 +6,10 @@
   import Bot from '@lucide/svelte/icons/bot'
   import LayoutTemplate from '@lucide/svelte/icons/layout-template'
   import Command from '@lucide/svelte/icons/command'
+  import Lightbulb from '@lucide/svelte/icons/lightbulb'
   import { createHotkey } from '@tanstack/svelte-hotkeys'
   import { cycleTheme, restorePreviousTheme } from '$lib/stores/settings.js'
+  import { pickRandomTip } from '$lib/insider-tips.js'
   import { toast } from 'svelte-sonner'
   import Sidebar from './Sidebar.svelte'
   import TabBar from './TabBar.svelte'
@@ -204,6 +206,11 @@
   let ormError = $state('')
 
   const activeTab = $derived(tabs.find((t) => t.id === activeTabId) ?? null)
+
+  let welcomeTip = $state(pickRandomTip())
+  $effect(() => {
+    if (activeTab?.kind === 'welcome') welcomeTip = pickRandomTip()
+  })
 
   const activeView = $derived(activeTab?.kind === 'sql' ? 'sql' : 'table')
 
@@ -1894,26 +1901,27 @@
       {:else}
         {@const isMac = navigator.platform.toUpperCase().includes('MAC')}
         {@const mod = isMac ? '⌘' : 'Ctrl'}
-        <div class="flex flex-1 flex-col items-center justify-center gap-10 overflow-auto p-10">
-          <div class="flex flex-col items-center gap-1 text-center">
-            <p class="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/50">studio</p>
-            <h1 class="text-sm font-medium text-foreground/80">Where do you want to start?</h1>
+        <div class="flex flex-1 flex-col items-center justify-center gap-8 overflow-auto p-10">
+
+          <div class="flex flex-col items-center gap-1.5 text-center">
+            <h1 class="text-ui font-medium text-foreground">Where do you want to start?</h1>
+            <p class="text-ui-xs text-muted-foreground">Open a view or pick a table below</p>
           </div>
 
-          <div class="grid w-full max-w-lg grid-cols-2 gap-2">
+          <div class="grid w-full max-w-md grid-cols-2 gap-2">
             <button
               onclick={openSqlTab}
-              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+              class="group flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border hover:bg-accent/20 hover:shadow-sm"
             >
               <div class="flex items-center justify-between">
-                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
-                  <Terminal size={13} />
+                <div class="flex size-8 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
+                  <Terminal size={14} />
                 </div>
-                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}T</kbd>
+                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}T</kbd>
               </div>
               <div>
-                <p class="text-xs font-medium text-foreground/80">SQL Editor</p>
-                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Write and run queries</p>
+                <p class="text-ui-sm font-medium text-foreground">SQL Editor</p>
+                <p class="mt-0.5 text-ui-xs text-muted-foreground">Write and run queries</p>
               </div>
             </button>
 
@@ -1922,84 +1930,78 @@
                 const first = tables[0]
                 if (first) openTableTab(activeSchema, first.name)
               }}
-              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+              class="group flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border hover:bg-accent/20 hover:shadow-sm"
             >
               <div class="flex items-center justify-between">
-                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
-                  <Table2 size={13} />
+                <div class="flex size-8 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
+                  <Table2 size={14} />
                 </div>
-                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧D</kbd>
+                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}⇧D</kbd>
               </div>
               <div>
-                <p class="text-xs font-medium text-foreground/80">Browse Data</p>
-                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Explore tables and views</p>
+                <p class="text-ui-sm font-medium text-foreground">Browse Data</p>
+                <p class="mt-0.5 text-ui-xs text-muted-foreground">Explore tables and views</p>
               </div>
             </button>
 
             <button
               onclick={openAiTab}
-              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+              class="group flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border hover:bg-accent/20 hover:shadow-sm"
             >
               <div class="flex items-center justify-between">
-                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
-                  <Bot size={13} />
+                <div class="flex size-8 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
+                  <Bot size={14} />
                 </div>
-                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧A</kbd>
+                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}⇧A</kbd>
               </div>
               <div>
-                <p class="text-xs font-medium text-foreground/80">AI Assistant</p>
-                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Ask questions in plain text</p>
+                <p class="text-ui-sm font-medium text-foreground">AI Assistant</p>
+                <p class="mt-0.5 text-ui-xs text-muted-foreground">Ask questions in plain text</p>
               </div>
             </button>
 
             <button
               onclick={openSchemaTab}
-              class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-left transition-all hover:border-border hover:bg-muted/40"
+              class="group flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 text-left transition-all hover:border-border hover:bg-accent/20 hover:shadow-sm"
             >
               <div class="flex items-center justify-between">
-                <div class="flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground group-hover:text-foreground">
-                  <LayoutTemplate size={13} />
+                <div class="flex size-8 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
+                  <LayoutTemplate size={14} />
                 </div>
-                <kbd class="rounded border border-border/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60">{mod}⇧E</kbd>
+                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}⇧E</kbd>
               </div>
               <div>
-                <p class="text-xs font-medium text-foreground/80">Schema Explorer</p>
-                <p class="mt-0.5 text-[11px] text-muted-foreground/60">Visualize your database</p>
+                <p class="text-ui-sm font-medium text-foreground">Schema Explorer</p>
+                <p class="mt-0.5 text-ui-xs text-muted-foreground">Visualize your database</p>
               </div>
             </button>
           </div>
 
-          {#if tables.length > 0}
-            <div class="w-full max-w-lg">
-              <p class="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground/40">Tables</p>
-              <div class="flex flex-wrap gap-1.5">
-                {#each tables.slice(0, 12) as t}
-                  <button
-                    onclick={() => openTableTab(activeSchema, t.name)}
-                    class="rounded-md border border-border/50 bg-muted/20 px-2.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground"
-                  >
-                    {t.name}
-                  </button>
-                {/each}
-                {#if tables.length > 12}
-                  <span class="rounded-md border border-border/30 px-2.5 py-1 font-mono text-[11px] text-muted-foreground/40">+{tables.length - 12} more</span>
-                {/if}
+          <div class="w-full max-w-md rounded-xl border border-border/40 bg-muted/15 p-4">
+            <div class="flex items-start gap-3">
+              <Lightbulb class="mt-0.5 size-3.5 shrink-0 text-muted-foreground/40" />
+              <div class="flex min-w-0 flex-col gap-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-ui-2xs font-medium uppercase tracking-wider text-muted-foreground/40">{welcomeTip.category}</span>
+                  <span class="font-mono text-ui-xs font-medium text-foreground/70">{welcomeTip.label}</span>
+                </div>
+                <p class="text-ui-xs leading-relaxed text-muted-foreground">{welcomeTip.text}</p>
               </div>
             </div>
-          {/if}
+          </div>
 
-          <div class="flex items-center gap-4">
+          <div class="flex items-center gap-3 text-ui-2xs text-muted-foreground/40">
             <button
               onclick={() => showShortcutsModal = true}
-              class="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-muted-foreground"
+              class="flex items-center gap-1.5 transition-colors hover:text-muted-foreground"
             >
-              <Command size={11} />
+              <Command size={10} />
               <span>keyboard shortcuts</span>
             </button>
             <span class="text-muted-foreground/20">·</span>
-            <span class="font-mono text-[11px] text-muted-foreground/30">{mod}B sidebar</span>
+            <span class="font-mono">{mod}B sidebar</span>
             <span class="text-muted-foreground/20">·</span>
-            <span class="font-mono text-[11px] text-muted-foreground/30">{mod}W close tab</span>
+            <span class="font-mono">{mod}W close tab</span>
           </div>
         </div>
       {/if}
