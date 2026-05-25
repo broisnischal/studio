@@ -1142,6 +1142,7 @@
                         {@const cellFk = foreignKeyForCell(idx, colIdx)}
                         {@const cellIsNull = row[colIdx] === null || row[colIdx] === undefined}
                         {@const activeFk = cellFk && !cellIsNull}
+                        {@const isFocusedCell = !isEditing && focusedRow === idx && focusedCol !== null && columns[colIdx]?.name === visibleColumns[focusedCol]?.name}
                         <td
                           data-col-idx={colIdx}
                           class={cn(
@@ -1152,6 +1153,7 @@
                             activeFk &&
                               !isEditing &&
                               "group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30",
+                            isFocusedCell && "bg-primary/10 text-foreground",
                           )}
                           style={isEditing ? "border: 0" : undefined}
                           data-font="mono"
