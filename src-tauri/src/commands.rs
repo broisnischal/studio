@@ -1,3 +1,64 @@
+use tauri::Emitter;
+
+/// Proxy an OpenAI-compatible chat completions request through the Rust backend,
+/// bypassing WebView CORS restrictions for local AI models (Ollama, LM Studio, etc.).
+///
+/// For streaming requests, response chunks are emitted as Tauri events:
+///   `ai-stream-{request_id}`       — text chunk payload
+///   `ai-stream-done-{request_id}`  — stream finished
+///   `ai-stream-error-{request_id}` — error message payload
+#[tauri::command]
+pub async fn ai_fetch(
+    app: tauri::AppHandle,
+    url: String,
+    api_key: Option<String>,
+    body: serde_json::Value,
+    stream: bool,
+    request_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let client = reqwest::Client::new();
+    let mut builder = client
+        .post(&url)
+        .header("Content-Type", "application/json");
+
+    if let Some(key) = &api_key {
+        if !key.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", key));
+        }
+    }
+
+    let response = builder.json(&body).send().await.map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        let detail: String = text.chars().take(400).collect();
+        return Err(format!("AI API {}: {}", status, detail));
+    }
+
+    if stream {
+        use futures::StreamExt;
+        let mut byte_stream = response.bytes_stream();
+        while let Some(chunk) = byte_stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    app.emit(&format!("ai-stream-{}", request_id), text).ok();
+                }
+                Err(e) => {
+                    app.emit(&format!("ai-stream-error-{}", request_id), e.to_string()).ok();
+                    return Ok(None);
+                }
+            }
+        }
+        app.emit(&format!("ai-stream-done-{}", request_id), true).ok();
+        Ok(None)
+    } else {
+        let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        Ok(Some(json))
+    }
+}
+
 /// Write text content to a path chosen by the user via a native save dialog.
 #[tauri::command]
 pub async fn save_file(path: String, content: String) -> Result<(), String> {

@@ -55,7 +55,10 @@ jobs:
           > Or: right-click the .dmg → Open → Open Anyway in System Settings → Privacy & Security.
 
           ### Linux
-          - \`.deb\` / \`.AppImage\` / \`.rpm\` (see assets below)
+          - \`.deb\` (Debian / Ubuntu)
+          - \`.rpm\` (Fedora / RHEL)
+          - \`.AppImage\` (universal)
+          - \`.pkg.tar.zst\` (Arch Linux)
 
           ### Windows
           - \`.exe\` NSIS setup (recommended)
@@ -118,13 +121,12 @@ jobs:
 
       - run: npm ci
 
-      # Run tauri build directly so we capture signed artifacts before
-      # anything can overwrite or delete them.
       - name: Build
         run: npx tauri build ${{ matrix.args }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          NO_STRIP: ${{ matrix.name == 'linux' && '1' || '' }}
 
       # ── macOS aarch64 ───────────────────────────────────────────────────────
       - name: Upload macOS aarch64 artifacts
@@ -139,7 +141,6 @@ jobs:
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
 
-          # tauri build only produces .app — package and sign the updater bundle manually
           pushd "$DIR/macos"
           tar czf "db-studio.app.tar.gz" "db-studio.app"
           popd
@@ -192,7 +193,6 @@ jobs:
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           DIR="src-tauri/target/release/bundle"
 
-          # Package and sign the AppImage updater bundle manually
           pushd "$DIR/appimage"
           tar czf "db-studio_${VERSION}_amd64.AppImage.tar.gz" "db-studio_${VERSION}_amd64.AppImage"
           popd
@@ -221,15 +221,26 @@ jobs:
           $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
           $dir     = "src-tauri/target/release/bundle"
 
-          # Package and sign the NSIS updater bundle manually
-          Compress-Archive `
-            -Path "$dir/nsis/db-studio_${version}_x64-setup.exe" `
-            -DestinationPath "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip" `
-            -Force
-          npx tauri signer sign "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"
+          $exe = "$dir/nsis/db-studio_${version}_x64-setup.exe"
+          $zip = "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"
 
-          Copy-Item "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"     "db-studio_x64-setup.nsis.zip"
-          Copy-Item "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip.sig" "updater.sig"
+          # Compress-Archive uses Deflate64 for large files, which Tauri's zip
+          # extractor doesn't support ("Compression method not supported").
+          # Use .NET ZipFile with CompressionLevel::Optimal (standard Deflate/method 8).
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $stream = [System.IO.Compression.ZipFile]::Open($zip, 'Create')
+          [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $stream,
+            $exe,
+            [System.IO.Path]::GetFileName($exe),
+            [System.IO.Compression.CompressionLevel]::Optimal
+          ) | Out-Null
+          $stream.Dispose()
+
+          npx tauri signer sign $zip
+
+          Copy-Item $zip       "db-studio_x64-setup.nsis.zip"
+          Copy-Item "$zip.sig" "updater.sig"
 
           gh release upload "$env:TAG" `
             "$dir/msi/db-studio_${version}_x64_en-US.msi" `
@@ -243,6 +254,69 @@ jobs:
           name: sig-${{ matrix.name }}
           path: updater.sig
           if-no-files-found: warn
+
+  build-arch:
+    needs: create-release
+    runs-on: ubuntu-latest
+    name: build-linux-arch
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build pacman package inside Arch container
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env TAURI_SIGNING_PRIVATE_KEY \
+            --env TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+            --env NO_STRIP=1 \
+            archlinux/archlinux:latest \
+            bash -uec '
+              # Refresh package database and install build dependencies
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm --needed \
+                base-devel \
+                nodejs \
+                npm \
+                rustup \
+                webkit2gtk-4.1 \
+                libayatana-appindicator \
+                librsvg \
+                patchelf
+
+              # makepkg refuses to run as root; patch the check — safe in CI containers.
+              sed -i "s/if (( EUID == 0 ))/if (( 0 ))/" /usr/bin/makepkg
+
+              # Set up stable Rust toolchain
+              rustup toolchain install stable --no-self-update
+              rustup default stable
+              source "$HOME/.cargo/env"
+
+              # node_modules were already installed on the host via "npm ci";
+              # the workspace is bind-mounted so they are available here.
+              npx tauri build --bundles pacman
+            '
+
+      - name: Upload pacman artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          gh release upload "$TAG" \
+            "src-tauri/target/release/bundle/pacman/db-studio-${VERSION}-1-x86_64.pkg.tar.zst" \
+            --clobber
 
 # ── 3. Combine signatures into latest.json ───────────────────────────────────
   publish-updater-json:

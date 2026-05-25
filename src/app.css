@@ -266,18 +266,14 @@
 
   .studio-data-table .studio-table-expand-gutter .studio-table-gutter-inner {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
+    align-items: stretch;
     width: 100%;
     min-height: 1.75rem;
     padding: 0;
-    margin: 0 auto;
   }
 
   .studio-data-table .studio-table-expand-gutter .studio-row-expand-icon {
     pointer-events: none;
-    flex-shrink: 0;
   }
 }
 

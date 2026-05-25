@@ -59,8 +59,13 @@
       updateVersion = update.version
       releaseNotes = update.body ?? ''
       status = 'available'
-    } catch {
-      // Silently ignore — update check failing shouldn't interrupt the user
+    } catch (e) {
+      // Only surface the error when manually triggered (checkNow); background
+      // checks fail silently so a network hiccup doesn't interrupt the user.
+      if (checking) {
+        errorMsg = String(e)
+        status = 'error'
+      }
     }
   }
 

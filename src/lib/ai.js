@@ -70,6 +70,75 @@ function sleep(ms, signal) {
   })
 }
 
+function isTauriApp() {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/**
+ * Proxy a fetch through the Tauri Rust backend to bypass CORS for local models.
+ * For streaming, response chunks arrive as Tauri events instead of a response body stream.
+ * @param {string} url
+ * @param {RequestInit} init
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{ ok: true, body?: ReadableStream, json?: () => Promise<unknown> }>}
+ */
+async function tauriFetch(url, init, signal) {
+  const { invoke } = await import('@tauri-apps/api/core')
+  const rawBody = /** @type {string} */ (init.body)
+  const body = JSON.parse(rawBody)
+  const headers = /** @type {Record<string, string>} */ (init.headers ?? {})
+  const authHeader = headers['Authorization'] ?? headers['authorization'] ?? ''
+  const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+  if (body.stream) {
+    const { listen } = await import('@tauri-apps/api/event')
+    const requestId = crypto.randomUUID()
+
+    let cleanedUp = false
+    /** @type {ReadableStreamDefaultController<Uint8Array>} */
+    let controller
+    const readable = new ReadableStream({
+      start(c) { controller = c },
+    })
+
+    const unlistens = await Promise.all([
+      listen(`ai-stream-${requestId}`, (/** @type {{ payload: string }} */ e) => {
+        if (!cleanedUp) controller.enqueue(new TextEncoder().encode(e.payload))
+      }),
+      listen(`ai-stream-done-${requestId}`, () => {
+        cleanup()
+        controller.close()
+      }),
+      listen(`ai-stream-error-${requestId}`, (/** @type {{ payload: string }} */ e) => {
+        cleanup()
+        controller.error(new Error(e.payload))
+      }),
+    ])
+
+    function cleanup() {
+      if (cleanedUp) return
+      cleanedUp = true
+      unlistens.forEach((fn) => fn())
+    }
+
+    signal?.addEventListener('abort', () => { cleanup(); controller.close() }, { once: true })
+
+    invoke('ai_fetch', { url, apiKey, body, stream: true, requestId })
+      .then(cleanup)
+      .catch((e) => {
+        if (!cleanedUp) {
+          cleanup()
+          controller.error(new Error(String(e)))
+        }
+      })
+
+    return { ok: true, body: readable }
+  } else {
+    const data = await invoke('ai_fetch', { url, apiKey, body, stream: false, requestId: '' })
+    return { ok: true, json: async () => data }
+  }
+}
+
 /** @param {string | null} header */
 function retryAfterMs(header) {
   if (!header) return null
@@ -115,6 +184,10 @@ function formatApiError(status, body) {
  * @param {(info: { attempt: number, waitMs: number, status: number }) => void} [onRetry]
  */
 async function fetchWithAiRetry(url, init, signal, onRetry) {
+  if (isTauriApp()) {
+    return tauriFetch(url, init, signal)
+  }
+
   let attempt = 0
   while (true) {
     const res = await fetch(url, { ...init, signal })

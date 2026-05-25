@@ -20,7 +20,6 @@
     foreignKeyTargetLabel,
   } from "$lib/foreign-key-nav.js";
   import TableLoading from "./TableLoading.svelte";
-  import MiniJsonViewer from "./MiniJsonViewer.svelte";
   import ColumnResizeHandle from "./ColumnResizeHandle.svelte";
   import {
     loadColumnWidths,
@@ -47,6 +46,7 @@
   import { cellLinkHref, cellUrlType } from "$lib/cell-display.js";
   import UrlPreviewTooltip from "./UrlPreviewTooltip.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
+  import RowExpandViewer from "./RowExpandViewer.svelte";
 
   let {
     columns = [],
@@ -99,6 +99,28 @@
   /** @type {string | null} */
   let resizingColName = $state(null);
   let resizeStartWidth = 0;
+
+  // ── Keyboard navigation / undo ────────────────────────────────────────────
+  /** Visible-column index of the focused cell (null = no cell focus). */
+  let focusedCol = $state(/** @type {number | null} */ (null));
+  /** Scrollable container element for programmatic focus + scroll. */
+  let tableContainer = $state(/** @type {HTMLDivElement | null} */ (null));
+  /** Whether to select-all text when the edit input is focused. */
+  let selectOnEditFocus = $state(true);
+  /** Raw cell value before the current edit started (for undo tracking). */
+  let lastEditOriginalValue = $state(/** @type {unknown} */ (undefined));
+  /**
+   * Committed edit history for Ctrl+Z.
+   * @type {{ rowIdx: number, colIdx: number, oldValue: unknown, newValue: unknown }[]}
+   */
+  let pastEdits = $state([]);
+  /**
+   * Undone edits available for Ctrl+Shift+Z / Ctrl+Y.
+   * @type {{ rowIdx: number, colIdx: number, oldValue: unknown, newValue: unknown }[]}
+   */
+  let futureEdits = $state([]);
+  /** True while focus is inside this table (container or any child). */
+  let isTableFocused = $state(false);
 
   // ── URL preview / lightbox ────────────────────────────────────────────────
   /** @type {string | null} */
@@ -204,6 +226,28 @@
   function focusRow(rowIdx) {
     if (editingCell) return;
     focusedRow = rowIdx;
+    if (focusedCol === null) focusedCol = 0;
+  }
+
+  /** Maps a visible-column index → actual column index in `columns`. */
+  function visToActualColIdx(visColIdx) {
+    const colName = visibleColumns[visColIdx]?.name;
+    return colName ? columns.findIndex((c) => c.name === colName) : -1;
+  }
+
+  /** Maps an actual column index → visible-column index (-1 if hidden). */
+  function actualToVisColIdx(actualColIdx) {
+    const colName = columns[actualColIdx]?.name;
+    return colName ? visibleColumns.findIndex((c) => c.name === colName) : -1;
+  }
+
+  /** @param {number} rowIdx */
+  function scrollRowIntoView(rowIdx) {
+    tick().then(() => {
+      tableContainer
+        ?.querySelector(`[data-row-idx="${rowIdx}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
   }
 
   const fkByColumn = $derived(
@@ -264,9 +308,13 @@
     window.addEventListener("pointercancel", release);
   }
 
-  /** @param {MouseEvent} e */
-
-  function startEdit(rowIdx, colIdx) {
+  /**
+   * @param {number} rowIdx
+   * @param {number} colIdx
+   * @param {string} [initialChar] When set, the cell starts with this character
+   *   instead of the existing value (type-to-edit behavior).
+   */
+  function startEdit(rowIdx, colIdx, initialChar) {
     const col = columns[colIdx];
     if (!col) return;
 
@@ -285,12 +333,14 @@
       return;
     }
 
-    focusRow(rowIdx);
+    focusedRow = rowIdx;
+    lastEditOriginalValue = rows[rowIdx]?.[colIdx];
+    selectOnEditFocus = initialChar === undefined;
     const original = valueToEditString(rows[rowIdx]?.[colIdx]);
     editingCell = {
       rowIdx,
       colIdx,
-      draft: original,
+      draft: initialChar !== undefined ? initialChar : original,
       original,
     };
   }
@@ -298,9 +348,11 @@
   function cancelEdit() {
     if (!editingCell) return;
     editingCell = null;
+    tick().then(() => tableContainer?.focus({ preventScroll: true }));
   }
 
-  async function commitEdit() {
+  /** @param {'down' | 'right' | 'left' | null} afterAction */
+  async function commitEditWithAction(afterAction) {
     if (!editingCell || saving) return;
 
     const { rowIdx, colIdx, draft } = editingCell;
@@ -309,6 +361,8 @@
 
     if (draft === editingCell.original) {
       editingCell = null;
+      if (afterAction) navigateAfterEdit(rowIdx, colIdx, afterAction);
+      else tick().then(() => tableContainer?.focus({ preventScroll: true }));
       return;
     }
 
@@ -323,12 +377,21 @@
     }
 
     try {
+      const oldVal = lastEditOriginalValue;
       await onsave({ rowIdx, colIdx, value: parsed.value });
+      pastEdits = [...pastEdits.slice(-49), { rowIdx, colIdx, oldValue: oldVal, newValue: parsed.value }];
+      futureEdits = [];
       editingCell = null;
       toast.success("Saved", { description: `${col.name} updated` });
+      if (afterAction) navigateAfterEdit(rowIdx, colIdx, afterAction);
+      else tick().then(() => tableContainer?.focus({ preventScroll: true }));
     } catch (err) {
       toast.error("Save failed", { description: String(err) });
     }
+  }
+
+  async function commitEdit() {
+    return commitEditWithAction(null);
   }
 
   async function copyCellValue(rowIdx, colIdx) {
@@ -394,6 +457,64 @@
     }
   }
 
+  /** @param {number} rowIdx @param {number} colIdx @param {'down'|'right'|'left'} action */
+  function navigateAfterEdit(rowIdx, colIdx, action) {
+    const visColIdx = actualToVisColIdx(colIdx);
+    const visLen = visibleColumns.length;
+    const rowLen = rows.length;
+    if (action === "down") {
+      const next = Math.min(rowIdx + 1, rowLen - 1);
+      focusedRow = next;
+      focusedCol = visColIdx >= 0 ? visColIdx : 0;
+      scrollRowIntoView(next);
+    } else if (action === "right") {
+      if (visColIdx < visLen - 1) { focusedRow = rowIdx; focusedCol = visColIdx + 1; }
+      else if (rowIdx < rowLen - 1) { focusedRow = rowIdx + 1; focusedCol = 0; scrollRowIntoView(rowIdx + 1); }
+    } else {
+      if (visColIdx > 0) { focusedRow = rowIdx; focusedCol = visColIdx - 1; }
+      else if (rowIdx > 0) { focusedRow = rowIdx - 1; focusedCol = visLen - 1; scrollRowIntoView(rowIdx - 1); }
+    }
+    tick().then(() => tableContainer?.focus({ preventScroll: true }));
+  }
+
+  async function undoEdit() {
+    if (!pastEdits.length) return;
+    const last = pastEdits[pastEdits.length - 1];
+    pastEdits = pastEdits.slice(0, -1);
+    futureEdits = [last, ...futureEdits];
+    try {
+      await onsave({ rowIdx: last.rowIdx, colIdx: last.colIdx, value: last.oldValue });
+      focusedRow = last.rowIdx;
+      const vi = actualToVisColIdx(last.colIdx);
+      focusedCol = vi >= 0 ? vi : 0;
+      scrollRowIntoView(last.rowIdx);
+      tick().then(() => tableContainer?.focus({ preventScroll: true }));
+    } catch (err) {
+      pastEdits = [...pastEdits, last];
+      futureEdits = futureEdits.slice(1);
+      toast.error("Undo failed", { description: String(err) });
+    }
+  }
+
+  async function redoEdit() {
+    if (!futureEdits.length) return;
+    const next = futureEdits[0];
+    futureEdits = futureEdits.slice(1);
+    pastEdits = [...pastEdits, next];
+    try {
+      await onsave({ rowIdx: next.rowIdx, colIdx: next.colIdx, value: next.newValue });
+      focusedRow = next.rowIdx;
+      const vi = actualToVisColIdx(next.colIdx);
+      focusedCol = vi >= 0 ? vi : 0;
+      scrollRowIntoView(next.rowIdx);
+      tick().then(() => tableContainer?.focus({ preventScroll: true }));
+    } catch (err) {
+      futureEdits = [next, ...futureEdits];
+      pastEdits = pastEdits.slice(0, -1);
+      toast.error("Redo failed", { description: String(err) });
+    }
+  }
+
   $effect(() => {
     if (!editingCell) return;
     void tick().then(() => {
@@ -401,7 +522,12 @@
       if (!el) return;
       el.focus();
       if (el instanceof HTMLInputElement) {
-        el.select();
+        if (selectOnEditFocus) {
+          el.select();
+        } else {
+          const len = el.value.length;
+          el.setSelectionRange(len, len);
+        }
       }
     });
   });
@@ -414,14 +540,52 @@
       cancelEdit();
       return;
     }
+
+    // Ctrl+Shift+Backspace: clear entire input
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "Backspace") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (editingCell) editingCell.draft = "";
+      return;
+    }
+
+    // Ctrl+Backspace: delete previous word (WebKit on Linux doesn't do this natively)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "Backspace") {
+      const el = editInput;
+      if (!(el instanceof HTMLInputElement) || !editingCell) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const val = el.value;
+      const pos = el.selectionStart ?? 0;
+      const selEnd = el.selectionEnd ?? 0;
+      if (pos !== selEnd) {
+        const lo = Math.min(pos, selEnd);
+        const hi = Math.max(pos, selEnd);
+        editingCell.draft = val.slice(0, lo) + val.slice(hi);
+        tick().then(() => { if (editInput instanceof HTMLInputElement) editInput.setSelectionRange(lo, lo); });
+      } else {
+        let start = pos;
+        while (start > 0 && /\s/.test(val[start - 1])) start--;
+        while (start > 0 && !/\s/.test(val[start - 1])) start--;
+        editingCell.draft = val.slice(0, start) + val.slice(pos);
+        tick().then(() => { if (editInput instanceof HTMLInputElement) editInput.setSelectionRange(start, start); });
+      }
+      return;
+    }
+
+    if (e.key === "Tab") {
+      e.preventDefault();
+      void commitEditWithAction(e.shiftKey ? "left" : "right");
+      return;
+    }
     if (e.key === "Enter" && !(e.shiftKey || e.altKey)) {
       e.preventDefault();
-      void commitEdit();
+      void commitEditWithAction("down");
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      void commitEdit();
+      void commitEditWithAction(null);
     }
   }
 
@@ -470,7 +634,7 @@
     expandedRows = next;
   }
 
-  const ROW_EXPAND_COL_WIDTH = 34;
+  const ROW_EXPAND_COL_WIDTH = 32;
   /** Fits 16px checkbox with equal inset; no extra horizontal padding in cells */
   const ROW_SELECT_COL_WIDTH = 32;
   const visibleColumns = $derived(
@@ -557,6 +721,188 @@
     }
     resizingColName = null;
   }
+
+  // Reset focus and undo history when the displayed table changes.
+  $effect(() => {
+    void columnWidthsKey;
+    focusedRow = null;
+    focusedCol = null;
+    pastEdits = [];
+    futureEdits = [];
+  });
+
+  // Document-level capture so undo/redo fires even during the brief window between
+  // editingCell being cleared and the container div regaining focus.
+  $effect(() => {
+    function onCapture(/** @type {KeyboardEvent} */ e) {
+      if (!isTableFocused || editingCell) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        e.shiftKey ? void redoEdit() : void undoEdit();
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        void redoEdit();
+      }
+    }
+    window.addEventListener("keydown", onCapture, true);
+    return () => window.removeEventListener("keydown", onCapture, true);
+  });
+
+  /** @param {KeyboardEvent} e */
+  function handleTableKeydown(e) {
+    // Ctrl+A: select all rows
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      if (!editingCell) selected = new Set(rows.map((_, i) => i));
+      return;
+    }
+    // Undo / redo — active even while the cell input has focus
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "z" || e.key === "Z")) {
+      if (!editingCell) {
+        e.preventDefault();
+        e.shiftKey ? void redoEdit() : void undoEdit();
+        return;
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "y" || e.key === "Y")) {
+      if (!editingCell) { e.preventDefault(); void redoEdit(); return; }
+    }
+    // Ctrl+Enter when not editing: start edit (same as Enter / F2)
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !editingCell) {
+      e.preventDefault();
+      if (focusedRow !== null && focusedCol !== null) {
+        const ai = visToActualColIdx(focusedCol);
+        if (ai >= 0) startEdit(focusedRow, ai);
+      } else { focusedRow = 0; focusedCol = 0; }
+      return;
+    }
+
+    if (editingCell) return;
+
+    const visLen = visibleColumns.length;
+    const rowLen = rows.length;
+    if (!rowLen || !visLen) return;
+
+    const curRow = focusedRow ?? 0;
+    const curCol = focusedCol ?? 0;
+
+    switch (e.key) {
+      case "ArrowDown": {
+        e.preventDefault();
+        const nr = Math.min(curRow + 1, rowLen - 1);
+        focusedRow = nr; if (focusedCol === null) focusedCol = 0;
+        scrollRowIntoView(nr);
+        break;
+      }
+      case "ArrowUp": {
+        e.preventDefault();
+        const pr = Math.max(curRow - 1, 0);
+        focusedRow = pr; if (focusedCol === null) focusedCol = 0;
+        scrollRowIntoView(pr);
+        break;
+      }
+      case "ArrowRight": {
+        e.preventDefault();
+        if (focusedRow === null) { focusedRow = 0; focusedCol = 0; break; }
+        if (curCol < visLen - 1) { focusedCol = curCol + 1; }
+        else if (curRow < rowLen - 1) { focusedRow = curRow + 1; focusedCol = 0; scrollRowIntoView(curRow + 1); }
+        break;
+      }
+      case "ArrowLeft": {
+        e.preventDefault();
+        if (focusedRow === null) { focusedRow = 0; focusedCol = 0; break; }
+        if (curCol > 0) { focusedCol = curCol - 1; }
+        else if (curRow > 0) { focusedRow = curRow - 1; focusedCol = visLen - 1; scrollRowIntoView(curRow - 1); }
+        break;
+      }
+      case "Tab": {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (focusedRow === null) { focusedRow = 0; focusedCol = 0; break; }
+          if (curCol > 0) { focusedCol = curCol - 1; }
+          else if (curRow > 0) { focusedRow = curRow - 1; focusedCol = visLen - 1; scrollRowIntoView(curRow - 1); }
+        } else {
+          if (focusedRow === null) { focusedRow = 0; focusedCol = 0; break; }
+          if (curCol < visLen - 1) { focusedCol = curCol + 1; }
+          else if (curRow < rowLen - 1) { focusedRow = curRow + 1; focusedCol = 0; scrollRowIntoView(curRow + 1); }
+        }
+        break;
+      }
+      case "Enter":
+      case "F2": {
+        e.preventDefault();
+        if (focusedRow !== null && focusedCol !== null) {
+          const ai = visToActualColIdx(focusedCol);
+          if (ai >= 0) startEdit(focusedRow, ai);
+        } else { focusedRow = 0; focusedCol = 0; }
+        break;
+      }
+      case "Escape": {
+        e.preventDefault();
+        focusedRow = null; focusedCol = null;
+        break;
+      }
+      case "Delete": {
+        if (focusedRow !== null && focusedCol !== null) {
+          const ai = visToActualColIdx(focusedCol);
+          if (ai >= 0 && canEditColumn(ai)) { e.preventDefault(); void setCellNull(focusedRow, ai); }
+        }
+        break;
+      }
+      case "Backspace": {
+        if (focusedRow !== null && focusedCol !== null) {
+          const ai = visToActualColIdx(focusedCol);
+          if (ai >= 0 && canEditColumn(ai)) {
+            const col = columns[ai];
+            const isSelectOrToggle = !!getColumnEnumValues(col) || isBooleanType(col?.dataType ?? col?.data_type ?? "");
+            if (!isSelectOrToggle) { e.preventDefault(); startEdit(focusedRow, ai, ""); }
+          }
+        }
+        break;
+      }
+      case "Home": {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) { focusedRow = 0; focusedCol = 0; scrollRowIntoView(0); }
+        else { focusedCol = 0; }
+        break;
+      }
+      case "End": {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) { focusedRow = rowLen - 1; focusedCol = visLen - 1; scrollRowIntoView(rowLen - 1); }
+        else { focusedCol = visLen - 1; }
+        break;
+      }
+      case "PageDown": {
+        e.preventDefault();
+        const pdn = Math.min(curRow + 10, rowLen - 1);
+        focusedRow = pdn; if (focusedCol === null) focusedCol = 0;
+        scrollRowIntoView(pdn);
+        break;
+      }
+      case "PageUp": {
+        e.preventDefault();
+        const pup = Math.max(curRow - 10, 0);
+        focusedRow = pup; if (focusedCol === null) focusedCol = 0;
+        scrollRowIntoView(pup);
+        break;
+      }
+      default: {
+        // Printable character → start editing with that char (type-to-edit)
+        if (
+          e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey &&
+          focusedRow !== null && focusedCol !== null
+        ) {
+          const ai = visToActualColIdx(focusedCol);
+          if (ai >= 0 && canEditColumn(ai)) {
+            const col = columns[ai];
+            const isSelectOrToggle = !!getColumnEnumValues(col) || isBooleanType(col?.dataType ?? col?.data_type ?? "");
+            if (!isSelectOrToggle) { e.preventDefault(); startEdit(focusedRow, ai, e.key); }
+          }
+        }
+        break;
+      }
+    }
+  }
 </script>
 
 {#if loading}
@@ -578,10 +924,11 @@
         {@const bitsContextMenu = props.oncontextmenu}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div
+          bind:this={tableContainer}
           {...props}
           tabindex={-1}
           class={cn(
-            "app-scroll relative overflow-auto bg-panel select-none [scrollbar-gutter:stable] [contain:layout] [will-change:scroll-position]",
+            "app-scroll relative overflow-auto bg-panel select-none outline-none [scrollbar-gutter:stable] [contain:layout] [will-change:scroll-position]",
             embedded ? "max-h-80" : "min-h-0 flex-1",
             resizingColName && "cursor-col-resize",
           )}
@@ -611,14 +958,19 @@
             // Hand off to bits-ui to open the menu
             bitsContextMenu?.(e);
           }}
-          onkeydown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "a") e.preventDefault();
+          onkeydown={handleTableKeydown}
+          onfocusin={() => { isTableFocused = true; }}
+          onfocusout={(e) => {
+            if (!tableContainer?.contains(e.relatedTarget instanceof Element ? e.relatedTarget : null)) {
+              isTableFocused = false;
+            }
           }}
         >
           <table
             class="studio-data-table w-max min-w-full table-fixed text-ui-sm"
           >
             <colgroup>
+
               {#if showRowExpand}
                 <col style="width: {ROW_EXPAND_COL_WIDTH}px" />
               {/if}
@@ -703,7 +1055,15 @@
                     onclick={(e) => {
                       if (e.button !== 0) return;
                       if (editingCell) cancelEdit();
-                      focusRow(idx);
+                      focusedRow = idx;
+                      const cellEl = e.target instanceof Element ? e.target.closest("td[data-col-idx]") : null;
+                      if (cellEl) {
+                        const vi = actualToVisColIdx(Number(cellEl.getAttribute("data-col-idx")));
+                        if (vi >= 0) focusedCol = vi;
+                      } else if (focusedCol === null) {
+                        focusedCol = 0;
+                      }
+                      tableContainer?.focus({ preventScroll: true });
                     }}
                     onauxclick={(e) => {
                       if (e.button !== 1) return;
@@ -736,7 +1096,7 @@
                         <div class="studio-table-gutter-inner">
                           <span
                             class={cn(
-                              "studio-row-expand-icon inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                              "studio-row-expand-icon flex w-full self-stretch items-center justify-center text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                               isRowExpanded(idx)
                                 ? "opacity-100"
                                 : "opacity-0 group-hover/row:opacity-100",
@@ -788,7 +1148,7 @@
                             "overflow-hidden font-mono",
                             isEditing
                               ? "relative p-0 align-middle ring-2 ring-inset ring-primary bg-background"
-                              : "whitespace-nowrap px-3 py-0.5 text-muted-foreground",
+                              : "group/cell relative whitespace-nowrap px-3 py-0.5 text-muted-foreground",
                             activeFk &&
                               !isEditing &&
                               "group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30",
@@ -915,7 +1275,7 @@
                               )}
                               title={activeFk
                                 ? `${cellText} — Ctrl/⌘-click or double-click to open ${foreignKeyTargetLabel(cellFk)}`
-                                : cellText}
+                                : undefined}
                             >
                               {#if cellHref}
                                 <a
@@ -965,12 +1325,22 @@
                               {/if}
                             </span>
                           {/if}
+                          {#if !isEditing}
+                            <button
+                              type="button"
+                              tabindex={-1}
+                              class="absolute right-0.5 top-1/2 z-10 -translate-y-1/2 inline-flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/cell:opacity-70 hover:!opacity-100 hover:bg-accent/60 hover:text-foreground"
+                              onclick={(e) => { e.stopPropagation(); void copyCellValue(idx, colIdx); }}
+                            >
+                              <Copy class="size-3" />
+                            </button>
+                          {/if}
                         </td>
                       {/if}
                     {/each}
                   </tr>
                   {#if showRowExpand && isRowExpanded(idx)}
-                    <tr class="bg-muted/15">
+                    <tr>
                       <td
                         class="studio-table-gutter"
                         style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
@@ -984,15 +1354,11 @@
                         ></td>
                       {/if}
                       <td colspan={dataColSpan} class="p-0 align-top">
-                        <div class="px-2 py-2 sm:px-3">
-                          <MiniJsonViewer
-                            class="max-w-none"
-                            value={rowToRecord(columns, row)}
-                            maxHeight={embedded
-                              ? "min(40vh, 12rem)"
-                              : "min(50vh, 20rem)"}
-                          />
-                        </div>
+                        <RowExpandViewer
+                          record={rowToRecord(columns, row)}
+                          rowLabel="row {idx + 1}"
+                          maxHeight={embedded ? "min(40vh, 16rem)" : "min(60vh, 32rem)"}
+                        />
                       </td>
                     </tr>
                   {/if}
