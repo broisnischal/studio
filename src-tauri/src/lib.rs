@@ -77,6 +77,8 @@ pub fn run() {
             commands::disconnect_postgres,
             commands::test_sqlite,
             commands::connect_sqlite_db,
+            commands::test_mysql,
+            commands::connect_mysql_db,
             commands::test_d1,
             commands::connect_d1_db,
             commands::pg_list_schemas,

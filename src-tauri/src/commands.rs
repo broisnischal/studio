@@ -88,11 +88,12 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
 }
 
 use crate::db::{
-    connect, connect_d1, connect_sqlite, disconnect,
+    connect, connect_d1, connect_mysql, connect_sqlite, disconnect,
     delete_table_row, delete_table_rows, execute_sql, get_table_rows, insert_table_row,
-    list_schemas, list_tables, list_indexes, list_enums, test_connection, test_d1_connection, test_sqlite_connection,
-    update_table_cell, ConnectionConfig, D1Config, DbState, EnumInfo, IndexInfo, InsertRowResult, SqlResult,
-    SqliteConfig, TableInfo, TableRows,
+    list_schemas, list_tables, list_indexes, list_enums,
+    test_connection, test_d1_connection, test_mysql_connection, test_sqlite_connection,
+    update_table_cell, ConnectionConfig, D1Config, DbState, EnumInfo, IndexInfo, InsertRowResult,
+    MysqlConfig, SqlResult, SqliteConfig, TableInfo, TableRows,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -126,6 +127,21 @@ pub async fn connect_sqlite_db(
     config: SqliteConfig,
 ) -> Result<(), String> {
     connect_sqlite(state, config).await
+}
+
+// ── MySQL ─────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn test_mysql(config: MysqlConfig) -> Result<(), String> {
+    test_mysql_connection(config).await
+}
+
+#[tauri::command]
+pub async fn connect_mysql_db(
+    state: State<'_, DbState>,
+    config: MysqlConfig,
+) -> Result<(), String> {
+    connect_mysql(state, config).await
 }
 
 // ── Cloudflare D1 ─────────────────────────────────────────────────────────────

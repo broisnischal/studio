@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use sqlx::mysql::MySqlPoolOptions;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::{PgPool, SqlitePool};
+use sqlx::{MySqlPool, PgPool, SqlitePool};
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
@@ -47,6 +48,35 @@ pub struct SqliteConfig {
     pub file_path: String,
 }
 
+// ── MySQL ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MysqlConfig {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password: String,
+    pub ssl: bool,
+}
+
+impl MysqlConfig {
+    pub fn connection_url(&self) -> String {
+        let ssl_mode = if self.ssl { "ssl-mode=required" } else { "ssl-mode=disabled" };
+        format!(
+            "mysql://{}:{}@{}:{}/{}?{}",
+            urlencoding::encode(&self.user),
+            urlencoding::encode(&self.password),
+            self.host,
+            self.port,
+            self.database,
+            ssl_mode
+        )
+    }
+}
+
 // ── Cloudflare D1 ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +94,7 @@ pub struct D1Config {
 pub enum ActiveConnection {
     Postgres(PgPool),
     Sqlite(SqlitePool),
+    Mysql(MySqlPool),
     D1(D1Config),
 }
 
@@ -72,6 +103,7 @@ impl ActiveConnection {
         match self {
             Self::Postgres(_) => "postgres",
             Self::Sqlite(_) => "sqlite",
+            Self::Mysql(_) => "mysql",
             Self::D1(_) => "d1",
         }
     }
@@ -126,6 +158,9 @@ async fn close_existing(state: &State<'_, DbState>) {
             let _ = tokio::time::timeout(timeout, p.close()).await;
         }
         Some(ActiveConnection::Sqlite(p)) => {
+            let _ = tokio::time::timeout(timeout, p.close()).await;
+        }
+        Some(ActiveConnection::Mysql(p)) => {
             let _ = tokio::time::timeout(timeout, p.close()).await;
         }
         _ => {}
@@ -205,6 +240,36 @@ pub async fn connect_sqlite(state: State<'_, DbState>, config: SqliteConfig) -> 
     let pool = open_sqlite(&config).await?;
     close_existing(&state).await;
     set_conn(&state, Some(ActiveConnection::Sqlite(pool)))
+}
+
+// ── MySQL connect / test ──────────────────────────────────────────────────────
+
+async fn open_mysql(config: &MysqlConfig) -> Result<MySqlPool, String> {
+    MySqlPoolOptions::new()
+        .max_connections(20)
+        .min_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(30))
+        .idle_timeout(std::time::Duration::from_secs(600))
+        .max_lifetime(std::time::Duration::from_secs(1800))
+        .connect(&config.connection_url())
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))
+}
+
+pub async fn test_mysql_connection(config: MysqlConfig) -> Result<(), String> {
+    let pool = open_mysql(&config).await?;
+    sqlx::query("SELECT 1")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("Query failed: {e}"))?;
+    pool.close().await;
+    Ok(())
+}
+
+pub async fn connect_mysql(state: State<'_, DbState>, config: MysqlConfig) -> Result<(), String> {
+    let pool = open_mysql(&config).await?;
+    close_existing(&state).await;
+    set_conn(&state, Some(ActiveConnection::Mysql(pool)))
 }
 
 // ── D1 connect / test ─────────────────────────────────────────────────────────

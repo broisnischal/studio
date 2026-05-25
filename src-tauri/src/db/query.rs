@@ -734,6 +734,11 @@ pub async fn get_table_rows(
         ActiveConnection::D1(cfg) => {
             return get_table_rows_d1(&cfg, &table, limit, offset, search, sort_column, sort_direction, filters).await;
         }
+        ActiveConnection::Mysql(pool) => {
+            return super::mysql::get_table_rows(
+                &pool, &schema, &table, limit, offset, search, sort_column, sort_direction, filters,
+            ).await;
+        }
         ActiveConnection::Postgres(_) => {}
     }
     let pool = require_pool(&state)?;
@@ -856,6 +861,9 @@ pub async fn update_table_cell(
         ActiveConnection::D1(cfg) => {
             return update_table_cell_d1(&cfg, &table, primary_key, &column, &value).await;
         }
+        ActiveConnection::Mysql(pool) => {
+            return super::mysql::update_table_cell(&pool, &schema, &table, primary_key, &column, &value).await;
+        }
         ActiveConnection::Postgres(_) => {}
     }
     let pool = require_pool(&state)?;
@@ -965,6 +973,10 @@ pub async fn insert_table_row(
         }
         ActiveConnection::D1(cfg) => {
             let row = insert_table_row_d1(&cfg, &table, values).await?;
+            return Ok(InsertRowResult { row });
+        }
+        ActiveConnection::Mysql(pool) => {
+            let row = super::mysql::insert_table_row(&pool, &schema, &table, values).await?;
             return Ok(InsertRowResult { row });
         }
         ActiveConnection::Postgres(_) => {}
@@ -1128,6 +1140,9 @@ pub async fn delete_table_rows(
         }
         ActiveConnection::D1(cfg) => {
             return delete_table_rows_d1(&cfg, &table, primary_keys).await;
+        }
+        ActiveConnection::Mysql(pool) => {
+            return super::mysql::delete_table_rows(&pool, &schema, &table, primary_keys).await;
         }
         ActiveConnection::Postgres(_) => {}
     }
@@ -1315,6 +1330,7 @@ pub async fn execute_sql(state: State<'_, DbState>, sql: String) -> Result<SqlRe
         ActiveConnection::Postgres(pool) => execute_sql_pg(&pool, sql_str).await,
         ActiveConnection::Sqlite(pool) => super::sqlite::execute_sql(&pool, sql_str).await,
         ActiveConnection::D1(cfg) => super::d1::query(&cfg, sql_str, vec![]).await,
+        ActiveConnection::Mysql(pool) => super::mysql::execute_sql(&pool, sql_str).await,
     }
 }
 

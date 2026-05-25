@@ -62,6 +62,38 @@ export async function connectSqlite(config) {
   return inv('connect_sqlite_db', { config: { name: String(config.name || 'SQLite'), filePath: String(config.filePath || '') } })
 }
 
+// ── MySQL ─────────────────────────────────────────────────────────────────────
+
+/** @param {{ name: string, host: string, port: number, database: string, user: string, password: string, ssl: boolean }} config */
+export async function testMysqlConnection(config) {
+  return inv('test_mysql', {
+    config: {
+      name: String(config.name || 'MySQL'),
+      host: String(config.host || '127.0.0.1'),
+      port: Math.min(65535, Math.max(1, Number(config.port) || 3306)),
+      database: String(config.database || ''),
+      user: String(config.user || 'root'),
+      password: String(config.password || ''),
+      ssl: Boolean(config.ssl),
+    },
+  })
+}
+
+/** @param {{ name: string, host: string, port: number, database: string, user: string, password: string, ssl: boolean }} config */
+export async function connectMysql(config) {
+  return inv('connect_mysql_db', {
+    config: {
+      name: String(config.name || 'MySQL'),
+      host: String(config.host || '127.0.0.1'),
+      port: Math.min(65535, Math.max(1, Number(config.port) || 3306)),
+      database: String(config.database || ''),
+      user: String(config.user || 'root'),
+      password: String(config.password || ''),
+      ssl: Boolean(config.ssl),
+    },
+  })
+}
+
 // ── Cloudflare D1 ─────────────────────────────────────────────────────────────
 
 /** @param {{ name: string, accountId: string, databaseId: string, apiToken: string }} config */

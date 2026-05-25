@@ -9,6 +9,7 @@
   import {
     testPostgresConnection, connectPostgres,
     testSqliteConnection,   connectSqlite,
+    testMysqlConnection,    connectMysql,
     testD1Connection,       connectD1,
   } from '$lib/api.js'
   import {
@@ -34,9 +35,10 @@
   } = $props()
 
   const DRIVERS = [
-    { id: 'postgres', label: 'PostgreSQL',    icon: Database,  color: 'text-blue-500'  },
-    { id: 'sqlite',   label: 'SQLite',        icon: HardDrive, color: 'text-green-500' },
-    { id: 'd1',       label: 'Cloudflare D1', icon: Cloud,     color: 'text-orange-500'},
+    { id: 'postgres', label: 'PostgreSQL',    icon: Database,  color: 'text-blue-500'   },
+    { id: 'mysql',    label: 'MySQL',         icon: Database,  color: 'text-orange-400' },
+    { id: 'sqlite',   label: 'SQLite',        icon: HardDrive, color: 'text-green-500'  },
+    { id: 'd1',       label: 'Cloudflare D1', icon: Cloud,     color: 'text-orange-500' },
   ]
 
   /** @type {import('$lib/stores/connections.js').SavedConnection[]} */
@@ -49,7 +51,7 @@
   let error      = $state('')
   let testOk     = $state(false)
 
-  /** @type {'postgres'|'sqlite'|'d1'} */
+  /** @type {'postgres'|'mysql'|'sqlite'|'d1'} */
   let dbType     = $state('postgres')
   let name       = $state('Local PostgreSQL')
   let host       = $state('127.0.0.1')
@@ -66,12 +68,16 @@
   let uriHint      = $state('')
 
   function defaultName(t) {
-    return t === 'sqlite' ? 'Local SQLite' : t === 'd1' ? 'Cloudflare D1' : 'Local PostgreSQL'
+    if (t === 'sqlite') return 'Local SQLite'
+    if (t === 'd1')     return 'Cloudflare D1'
+    if (t === 'mysql')  return 'Local MySQL'
+    return 'Local PostgreSQL'
   }
 
   function formPayload() {
     if (dbType === 'sqlite') return { type: 'sqlite', name, filePath }
     if (dbType === 'd1')     return { type: 'd1', name, accountId, databaseId, apiToken }
+    if (dbType === 'mysql')  return { type: 'mysql', name, host, port: port || '3306', database, user, password, ssl }
     return { type: 'postgres', name, host, port, database, user, password, ssl }
   }
 
@@ -97,6 +103,7 @@
       password = ''; ssl = false; filePath = ''
       accountId = ''; databaseId = ''; apiToken = ''
     }
+    port = port || defaultPortForType(dbType)
     error = ''; testOk = false; connectionUri = ''; uriHint = ''
   }
 
@@ -140,6 +147,10 @@
     return `${conn.user ?? ''}@${conn.host ?? ''}:${conn.port ?? ''}/${conn.database ?? ''}`
   }
 
+  function defaultPortForType(t) {
+    return t === 'mysql' ? '3306' : '5432'
+  }
+
   function relativeTime(ts) {
     if (!ts) return ''
     const s = (Date.now() - ts) / 1000
@@ -176,6 +187,7 @@
     try {
       if (conn.type === 'sqlite') await connectSqlite(conn)
       else if (conn.type === 'd1') await connectD1(conn)
+      else if (conn.type === 'mysql') await connectMysql(conn)
       else await connectPostgres(conn)
       const updated = { ...conn, lastConnectedAt: Date.now() }
       saved = upsertConnection(updated).sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))
@@ -192,6 +204,7 @@
       const p = formPayload()
       if (p.type === 'sqlite') await testSqliteConnection(p)
       else if (p.type === 'd1') await testD1Connection(p)
+      else if (p.type === 'mysql') await testMysqlConnection(p)
       else await testPostgresConnection(p)
       testOk = true
     } catch (e) { error = String(e) }
@@ -204,6 +217,7 @@
       const payload = formPayload()
       if (payload.type === 'sqlite') await connectSqlite(payload)
       else if (payload.type === 'd1') await connectD1(payload)
+      else if (payload.type === 'mysql') await connectMysql(payload)
       else await connectPostgres(payload)
 
       const existing = editingId
@@ -212,13 +226,14 @@
             if (s.type !== payload.type) return false
             if (payload.type === 'sqlite') return s.filePath === payload.filePath
             if (payload.type === 'd1') return s.databaseId === payload.databaseId && s.accountId === payload.accountId
+            if (payload.type === 'mysql') return s.host === payload.host && s.port === payload.port && s.database === payload.database
             return s.host === payload.host && s.database === payload.database
           })
       const id = existing?.id ?? newConnectionId()
       const saved_conn = {
         id,
         ...payload,
-        port: payload.type === 'postgres' ? (Number(payload.port) || 5432) : undefined,
+        port: (payload.type === 'postgres' || payload.type === 'mysql') ? (Number(payload.port) || (payload.type === 'mysql' ? 3306 : 5432)) : undefined,
         lastConnectedAt: Date.now(),
       }
       saved = upsertConnection(saved_conn).sort((a, b) => (b.lastConnectedAt ?? 0) - (a.lastConnectedAt ?? 0))
@@ -355,7 +370,7 @@
         <ScrollArea class="min-h-0 min-w-0 flex-1">
           <div class="flex min-w-0 flex-col gap-5 px-6 py-5">
 
-            <div class="grid grid-cols-3 gap-2">
+            <div class="grid grid-cols-4 gap-2">
               {#each DRIVERS as d (d.id)}
                 {@const Icon = d.icon}
                 <button
@@ -363,9 +378,10 @@
                   class="flex flex-col items-center gap-1.5 rounded-xl border py-3 transition-colors
                          {dbType === d.id ? 'border-ring bg-accent/50 shadow-sm' : 'border-border hover:bg-accent/30'}"
                   onclick={() => {
-                    const AUTO = ['Local PostgreSQL', 'Local SQLite', 'Cloudflare D1']
+                    const AUTO = ['Local PostgreSQL', 'Local MySQL', 'Local SQLite', 'Cloudflare D1']
                     if (AUTO.includes(name)) name = defaultName(d.id)
                     dbType = d.id
+                    port = defaultPortForType(d.id)
                     connectionUri = ''
                     uriHint = ''
                   }}
@@ -433,6 +449,40 @@
                   <div class="flex items-center gap-2 pt-1">
                     <Checkbox id="cn-ssl" checked={ssl} onCheckedChange={(v) => (ssl = v === true)} />
                     <Label for="cn-ssl" class="text-xs font-normal text-muted-foreground cursor-pointer">Use SSL (sslmode=require)</Label>
+                  </div>
+                </div>
+              </div>
+
+            {:else if dbType === 'mysql'}
+              <div class="grid grid-cols-2 gap-4">
+                <div class="flex flex-col gap-3">
+                  <div class="grid grid-cols-[1fr_88px] gap-2">
+                    <div class="flex flex-col gap-1.5">
+                      <Label for="cn-mysql-host" class="text-xs font-medium">Host</Label>
+                      <Input id="cn-mysql-host" bind:value={host} class="h-9 text-sm" />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                      <Label for="cn-mysql-port" class="text-xs font-medium">Port</Label>
+                      <Input id="cn-mysql-port" type="number" bind:value={port} class="h-9 text-sm" />
+                    </div>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <Label for="cn-mysql-db" class="text-xs font-medium">Database</Label>
+                    <Input id="cn-mysql-db" bind:value={database} class="h-9 text-sm" />
+                  </div>
+                </div>
+                <div class="flex flex-col gap-3">
+                  <div class="flex flex-col gap-1.5">
+                    <Label for="cn-mysql-user" class="text-xs font-medium">User</Label>
+                    <Input id="cn-mysql-user" bind:value={user} autocomplete="username" class="h-9 text-sm" />
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <Label for="cn-mysql-pass" class="text-xs font-medium">Password</Label>
+                    <Input id="cn-mysql-pass" type="password" bind:value={password} autocomplete="current-password" class="h-9 text-sm" />
+                  </div>
+                  <div class="flex items-center gap-2 pt-1">
+                    <Checkbox id="cn-mysql-ssl" checked={ssl} onCheckedChange={(v) => (ssl = v === true)} />
+                    <Label for="cn-mysql-ssl" class="text-xs font-normal text-muted-foreground cursor-pointer">Use SSL (ssl-mode=required)</Label>
                   </div>
                 </div>
               </div>

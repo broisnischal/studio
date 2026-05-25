@@ -1,6 +1,6 @@
 use super::connection::{require_conn, ActiveConnection, DbState};
 use serde::Serialize;
-use sqlx::{PgPool, Row};
+use sqlx::{MySqlPool, PgPool, Row};
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize)]
@@ -300,6 +300,79 @@ async fn list_indexes_d1(cfg: &super::connection::D1Config) -> Result<Vec<IndexI
         .collect())
 }
 
+// ── MySQL ─────────────────────────────────────────────────────────────────────
+
+async fn list_schemas_mysql(pool: &MySqlPool) -> Result<Vec<String>, String> {
+    let row = sqlx::query("SELECT DATABASE()")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to get database: {e}"))?;
+    let db: Option<String> = row.try_get(0).unwrap_or(None);
+    Ok(vec![db.unwrap_or_else(|| "default".to_string())])
+}
+
+async fn list_tables_mysql(pool: &MySqlPool, schema: &str) -> Result<Vec<TableInfo>, String> {
+    let rows = sqlx::query(
+        "SELECT TABLE_NAME, TABLE_TYPE, COALESCE(TABLE_ROWS, 0) \
+         FROM information_schema.TABLES \
+         WHERE TABLE_SCHEMA = ? \
+         ORDER BY TABLE_NAME",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list tables: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let name: String = r.try_get(0).ok()?;
+            let ty: String = r.try_get(1).unwrap_or_else(|_| "BASE TABLE".to_string());
+            let row_count: i64 = r.try_get::<Option<i64>, _>(2).unwrap_or(None).unwrap_or(0);
+            let kind = if ty == "VIEW" { "view" } else { "table" }.to_string();
+            Some(TableInfo { name, kind, row_count })
+        })
+        .collect())
+}
+
+async fn list_indexes_mysql(pool: &MySqlPool, schema: &str) -> Result<Vec<IndexInfo>, String> {
+    let rows = sqlx::query(
+        "SELECT INDEX_NAME, TABLE_NAME, \
+                GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS columns, \
+                MIN(INDEX_TYPE) AS index_type, \
+                MIN(NON_UNIQUE) AS non_unique, \
+                MAX(IF(INDEX_NAME = 'PRIMARY', 1, 0)) AS is_primary \
+         FROM information_schema.STATISTICS \
+         WHERE TABLE_SCHEMA = ? \
+         GROUP BY INDEX_NAME, TABLE_NAME \
+         ORDER BY TABLE_NAME, MAX(IF(INDEX_NAME = 'PRIMARY', 1, 0)) DESC, INDEX_NAME",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list indexes: {e}"))?;
+
+    Ok(rows
+        .iter()
+        .filter_map(|r| {
+            let name: String = r.try_get(0).ok()?;
+            let table_name: String = r.try_get(1).ok()?;
+            let columns: String = r.try_get::<Option<String>, _>(2).ok().flatten().unwrap_or_default();
+            let index_type: String = r.try_get::<Option<String>, _>(3).ok().flatten().unwrap_or_else(|| "BTREE".to_string());
+            let non_unique: i64 = r.try_get::<Option<i64>, _>(4).ok().flatten().unwrap_or(1);
+            let is_primary_i: i64 = r.try_get::<Option<i64>, _>(5).ok().flatten().unwrap_or(0);
+            Some(IndexInfo {
+                name,
+                table_name,
+                columns,
+                index_type: index_type.to_lowercase(),
+                is_unique: non_unique == 0,
+                is_primary: is_primary_i != 0,
+            })
+        })
+        .collect())
+}
+
 // ── Enums (PostgreSQL only) ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
@@ -341,6 +414,7 @@ async fn list_enums_pg(pool: &PgPool, schema: &str) -> Result<Vec<EnumInfo>, Str
 pub async fn list_schemas(state: State<'_, DbState>) -> Result<Vec<String>, String> {
     match require_conn(&state)? {
         ActiveConnection::Postgres(pool) => list_schemas_pg(&pool).await,
+        ActiveConnection::Mysql(pool) => list_schemas_mysql(&pool).await,
         ActiveConnection::Sqlite(_) | ActiveConnection::D1(_) => Ok(vec!["main".to_string()]),
     }
 }
@@ -351,6 +425,7 @@ pub async fn list_tables(state: State<'_, DbState>, schema: String) -> Result<Ve
             validate_ident(&schema)?;
             list_tables_pg(&pool, &schema).await
         }
+        ActiveConnection::Mysql(pool) => list_tables_mysql(&pool, &schema).await,
         ActiveConnection::Sqlite(pool) => list_tables_sqlite(&pool).await,
         ActiveConnection::D1(cfg) => list_tables_d1(&cfg).await,
     }
@@ -362,6 +437,7 @@ pub async fn list_indexes(state: State<'_, DbState>, schema: String) -> Result<V
             validate_ident(&schema)?;
             list_indexes_pg(&pool, &schema).await
         }
+        ActiveConnection::Mysql(pool) => list_indexes_mysql(&pool, &schema).await,
         ActiveConnection::Sqlite(pool) => list_indexes_sqlite(&pool).await,
         ActiveConnection::D1(cfg) => list_indexes_d1(&cfg).await,
     }
@@ -373,7 +449,7 @@ pub async fn list_enums(state: State<'_, DbState>, schema: String) -> Result<Vec
             validate_ident(&schema)?;
             list_enums_pg(&pool, &schema).await
         }
-        // SQLite / D1 have no enum types
+        // MySQL / SQLite / D1 have no enum types accessible this way
         _ => Ok(vec![]),
     }
 }

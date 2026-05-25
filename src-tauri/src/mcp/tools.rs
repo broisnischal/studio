@@ -123,7 +123,38 @@ async fn execute_sql(
         ActiveConnection::Postgres(pool) => execute_sql_pg(pool, sql, max_rows).await,
         ActiveConnection::Sqlite(pool) => execute_sql_sqlite(pool, sql, max_rows).await,
         ActiveConnection::D1(cfg) => execute_sql_d1(cfg, sql, max_rows).await,
+        ActiveConnection::Mysql(pool) => execute_sql_mysql(pool, sql, max_rows).await,
     }
+}
+
+async fn execute_sql_mysql(
+    pool: &sqlx::MySqlPool,
+    sql: &str,
+    max_rows: usize,
+) -> Result<String, String> {
+    use sqlx::{Column, Row};
+    let rows = sqlx::query(sql)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("SQL error: {e}"))?;
+
+    if rows.is_empty() {
+        return Ok(json!({ "columns": [], "rows": [], "row_count": 0 }).to_string());
+    }
+
+    let columns: Vec<String> = rows[0].columns().iter().map(|c| c.name().to_string()).collect();
+    let data: Vec<Vec<serde_json::Value>> = rows
+        .iter()
+        .take(max_rows)
+        .map(|row| (0..columns.len()).map(|i| crate::db::mysql::cell_to_json(row, i)).collect())
+        .collect();
+
+    Ok(json!({
+        "columns": columns,
+        "rows": data,
+        "row_count": rows.len(),
+        "truncated": rows.len() > max_rows
+    }).to_string())
 }
 
 async fn execute_sql_pg(
@@ -221,7 +252,30 @@ async fn list_tables(conn: &ActiveConnection, schema: &str) -> Result<String, St
         ActiveConnection::Postgres(pool) => list_tables_pg(pool, schema).await,
         ActiveConnection::Sqlite(pool) => list_tables_sqlite(pool).await,
         ActiveConnection::D1(cfg) => list_tables_d1(cfg).await,
+        ActiveConnection::Mysql(pool) => list_tables_mysql(pool, schema).await,
     }
+}
+
+async fn list_tables_mysql(pool: &sqlx::MySqlPool, schema: &str) -> Result<String, String> {
+    let rows = sqlx::query(
+        "SELECT TABLE_NAME, TABLE_TYPE, COALESCE(TABLE_ROWS, 0) \
+         FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list tables: {e}"))?;
+
+    let tables: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let name: String = r.try_get(0).unwrap_or_default();
+            let kind: String = r.try_get(1).unwrap_or_default();
+            let row_count: i64 = r.try_get::<Option<i64>, _>(2).ok().flatten().unwrap_or(0);
+            json!({ "name": name, "type": kind, "row_estimate": row_count })
+        })
+        .collect();
+    Ok(json!({ "schema": schema, "tables": tables }).to_string())
 }
 
 async fn list_tables_pg(pool: &sqlx::PgPool, schema: &str) -> Result<String, String> {
@@ -295,7 +349,42 @@ async fn describe_table(
         ActiveConnection::Postgres(pool) => describe_table_pg(pool, schema, table).await,
         ActiveConnection::Sqlite(pool) => describe_table_sqlite(pool, table).await,
         ActiveConnection::D1(cfg) => describe_table_sqlite_compat(cfg, table).await,
+        ActiveConnection::Mysql(pool) => describe_table_mysql(pool, schema, table).await,
     }
+}
+
+async fn describe_table_mysql(pool: &sqlx::MySqlPool, schema: &str, table: &str) -> Result<String, String> {
+    let col_rows = sqlx::query(
+        "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_KEY \
+         FROM information_schema.COLUMNS \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Column query failed: {e}"))?;
+
+    let columns: Vec<serde_json::Value> = col_rows
+        .iter()
+        .map(|r| {
+            let name: String = r.try_get(0).unwrap_or_default();
+            let col_type: String = r.try_get(1).unwrap_or_default();
+            let nullable: String = r.try_get(2).unwrap_or_else(|_| "YES".to_string());
+            let default: Option<String> = r.try_get::<Option<String>, _>(3).ok().flatten();
+            let extra: String = r.try_get(4).unwrap_or_default();
+            json!({
+                "name": name,
+                "type": col_type,
+                "nullable": nullable == "YES",
+                "default": default,
+                "identity": extra.to_lowercase().contains("auto_increment"),
+            })
+        })
+        .collect();
+
+    let pk = crate::db::mysql::fetch_primary_key(pool, schema, table).await.unwrap_or_default();
+    Ok(json!({ "schema": schema, "table": table, "columns": columns, "primary_key": pk }).to_string())
 }
 
 async fn describe_table_pg(
@@ -512,7 +601,43 @@ async fn check_migrations(conn: &ActiveConnection, schema: &str) -> Result<Strin
         ActiveConnection::Postgres(pool) => check_migrations_pg(pool, schema).await,
         ActiveConnection::Sqlite(pool) => check_migrations_sqlite(pool).await,
         ActiveConnection::D1(cfg) => check_migrations_d1(cfg).await,
+        ActiveConnection::Mysql(pool) => check_migrations_mysql(pool, schema).await,
     }
+}
+
+async fn check_migrations_mysql(pool: &sqlx::MySqlPool, schema: &str) -> Result<String, String> {
+    let existing: Vec<String> = sqlx::query_scalar(
+        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut results = Vec::new();
+    for (tbl, framework, name_col, ts_col) in MIGRATION_TABLES {
+        if !existing.iter().any(|t| t.as_str() == *tbl) {
+            results.push(json!({ "table": tbl, "framework": framework, "found": false }));
+            continue;
+        }
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM `{schema}`.`{tbl}`"))
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+        let order = if ts_col.is_empty() { format!("`{name_col}` DESC") } else { format!("`{ts_col}` DESC") };
+        let recent = sqlx::query(&format!(
+            "SELECT `{name_col}` as name FROM `{schema}`.`{tbl}` ORDER BY {order} LIMIT 5"
+        ))
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        let entries: Vec<serde_json::Value> = recent
+            .iter()
+            .map(|r| json!({ "name": r.try_get::<String, _>("name").unwrap_or_default() }))
+            .collect();
+        results.push(json!({ "table": tbl, "framework": framework, "found": true, "total_migrations": count, "recent": entries }));
+    }
+    Ok(json!({ "schema": schema, "migration_tables": results }).to_string())
 }
 
 /// Well-known migration tracking tables. Tuple: (table, framework, name_col, timestamp_col)
@@ -673,7 +798,22 @@ async fn explain_query(conn: &ActiveConnection, sql: &str) -> Result<String, Str
         ActiveConnection::Postgres(pool) => explain_query_pg(pool, sql).await,
         ActiveConnection::Sqlite(pool) => explain_query_sqlite(pool, sql).await,
         ActiveConnection::D1(cfg) => explain_query_d1(cfg, sql).await,
+        ActiveConnection::Mysql(pool) => explain_query_mysql(pool, sql).await,
     }
+}
+
+async fn explain_query_mysql(pool: &sqlx::MySqlPool, sql: &str) -> Result<String, String> {
+    let rows = sqlx::query(&format!("EXPLAIN FORMAT=JSON {sql}"))
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("EXPLAIN failed: {e}"))?;
+
+    let plan_text: String = rows
+        .first()
+        .and_then(|r| r.try_get::<String, _>(0).ok())
+        .unwrap_or_default();
+    let plan: serde_json::Value = serde_json::from_str(&plan_text).unwrap_or(json!(plan_text));
+    Ok(json!({ "plan": plan, "database": "mysql" }).to_string())
 }
 
 async fn explain_query_pg(pool: &sqlx::PgPool, sql: &str) -> Result<String, String> {
@@ -724,7 +864,43 @@ async fn get_database_stats(conn: &ActiveConnection, schema: &str) -> Result<Str
         ActiveConnection::Postgres(pool) => get_database_stats_pg(pool, schema).await,
         ActiveConnection::Sqlite(pool) => get_database_stats_sqlite(pool).await,
         ActiveConnection::D1(cfg) => get_database_stats_d1(cfg).await,
+        ActiveConnection::Mysql(pool) => get_database_stats_mysql(pool, schema).await,
     }
+}
+
+async fn get_database_stats_mysql(pool: &sqlx::MySqlPool, schema: &str) -> Result<String, String> {
+    let rows = sqlx::query(
+        "SELECT TABLE_NAME, \
+                COALESCE(DATA_LENGTH + INDEX_LENGTH, 0) AS total_size, \
+                COALESCE(DATA_LENGTH, 0) AS data_size, \
+                COALESCE(INDEX_LENGTH, 0) AS index_size, \
+                COALESCE(TABLE_ROWS, 0) AS row_estimate \
+         FROM information_schema.TABLES \
+         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' \
+         ORDER BY total_size DESC LIMIT 30",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Stats query failed: {e}"))?;
+
+    let tables: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let total: i64 = r.try_get::<Option<i64>, _>(1).ok().flatten().unwrap_or(0);
+            let data: i64 = r.try_get::<Option<i64>, _>(2).ok().flatten().unwrap_or(0);
+            let idx: i64 = r.try_get::<Option<i64>, _>(3).ok().flatten().unwrap_or(0);
+            let live: i64 = r.try_get::<Option<i64>, _>(4).ok().flatten().unwrap_or(0);
+            json!({
+                "table": r.try_get::<String, _>(0).unwrap_or_default(),
+                "total_size": fmt_bytes(total),
+                "table_size": fmt_bytes(data),
+                "index_size": fmt_bytes(idx),
+                "live_rows": live,
+            })
+        })
+        .collect();
+    Ok(json!({ "schema": schema, "tables": tables }).to_string())
 }
 
 fn fmt_bytes(bytes: i64) -> String {
