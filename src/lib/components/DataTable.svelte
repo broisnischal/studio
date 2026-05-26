@@ -18,6 +18,8 @@
   import Braces from "@lucide/svelte/icons/braces";
   import CheckSquare from "@lucide/svelte/icons/check-square";
   import PanelRight from "@lucide/svelte/icons/panel-right";
+  import Pin from "@lucide/svelte/icons/pin";
+  import PinOff from "@lucide/svelte/icons/pin-off";
   import Table2 from "@lucide/svelte/icons/table-2";
   import ExternalLink from "@lucide/svelte/icons/external-link";
   import {
@@ -93,6 +95,8 @@
      * @type {{ name: string, tableName: string, columns: string, indexType: string, isUnique: boolean, isPrimary: boolean }[]}
      */
     indexes = [],
+    /** Column names pinned to the left. Bindable so the parent can persist. */
+    pinnedColumns = $bindable(/** @type {Set<string>} */ (new Set())),
   } = $props();
 
   /** @type {HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null} */
@@ -132,6 +136,12 @@
   let futureEdits = $state([]);
   /** True while focus is inside this table (container or any child). */
   let isTableFocused = $state(false);
+
+  // ── Column collapse (drag-to-hide) ───────────────────────────────────────
+  const COLLAPSED_COL_WIDTH = 12  // px width of the collapsed indicator strip
+  const COLLAPSE_ZONE = 40        // drag below this → snap preview + collapse on release
+  /** Columns collapsed by dragging the resize handle fully left. */
+  let collapsedColumns = $state(/** @type {Set<string>} */ (new Set()))
 
   // ── Virtual scroll ────────────────────────────────────────────────────────
   const VIRTUAL_THRESHOLD = 500
@@ -222,6 +232,8 @@
     menuForeignKey ? foreignKeyTargetLabel(menuForeignKey) : "",
   );
   const menuEditable = $derived(canEditColumn(contextColIdx));
+  const menuColPinned = $derived(pinnedColumns.has(menuColName));
+  const menuColCollapsed = $derived(collapsedColumns.has(menuColName));
   const menuCellNull = $derived(
     rows[contextRowIdx]?.[contextColIdx] === null ||
       rows[contextRowIdx]?.[contextColIdx] === undefined,
@@ -247,16 +259,16 @@
     if (focusedCol === null) focusedCol = 0;
   }
 
-  /** Maps a visible-column index → actual column index in `columns`. */
+  /** Maps a navigable-column index → actual column index in `columns`. Skips collapsed strips. */
   function visToActualColIdx(visColIdx) {
-    const colName = visibleColumns[visColIdx]?.name;
+    const colName = navigableColumns[visColIdx]?.name;
     return colName ? columns.findIndex((c) => c.name === colName) : -1;
   }
 
-  /** Maps an actual column index → visible-column index (-1 if hidden). */
+  /** Maps an actual column index → navigable-column index (-1 if hidden/collapsed). */
   function actualToVisColIdx(actualColIdx) {
     const colName = columns[actualColIdx]?.name;
-    return colName ? visibleColumns.findIndex((c) => c.name === colName) : -1;
+    return colName ? navigableColumns.findIndex((c) => c.name === colName) : -1;
   }
 
   /** @param {number} rowIdx */
@@ -488,7 +500,7 @@
   /** @param {number} rowIdx @param {number} colIdx @param {'down'|'right'|'left'} action */
   function navigateAfterEdit(rowIdx, colIdx, action) {
     const visColIdx = actualToVisColIdx(colIdx);
-    const visLen = visibleColumns.length;
+    const visLen = navigableColumns.length;
     const rowLen = rows.length;
     if (action === "down") {
       const next = Math.min(rowIdx + 1, rowLen - 1);
@@ -672,6 +684,23 @@
   const totalColSpan = $derived(
     (showRowExpand ? 1 : 0) + (showSelection ? 1 : 0) + visibleColumns.length,
   )
+  /** Columns visible to the keyboard — excludes collapsed strips. */
+  const navigableColumns = $derived(visibleColumns.filter((c) => !collapsedColumns.has(c.name)))
+  /** Total gutter width before the first data column. */
+  const gutterTotalWidth = $derived(
+    (showRowExpand ? ROW_EXPAND_COL_WIDTH : 0) + (showSelection ? ROW_SELECT_COL_WIDTH : 0),
+  )
+  /** Map of pinned column name → sticky left offset in px. */
+  const pinnedOffsets = $derived.by(() => {
+    const map = new Map()
+    let left = gutterTotalWidth
+    for (const col of visibleColumns) {
+      if (!pinnedColumns.has(col.name)) continue
+      map.set(col.name, left)
+      left += widthForColumn(col.name, col.dataType ?? col.data_type ?? '')
+    }
+    return map
+  })
   const useVirtual = $derived(rows.length > VIRTUAL_THRESHOLD && !embedded)
   // Split into separate primitives so Svelte only re-runs the {#each} when an
   // index actually crosses a row boundary (every 28px), not on every scroll pixel.
@@ -752,6 +781,7 @@
 
   /** @param {string} name @param {string} dataType */
   function widthForColumn(name, dataType) {
+    if (collapsedColumns.has(name)) return COLLAPSED_COL_WIDTH
     return columnWidths[name] ?? defaultColumnWidth(dataType);
   }
 
@@ -784,7 +814,9 @@
   /** @param {number} dx */
   function applyColumnResize(dx) {
     if (!resizingColName) return;
-    _pendingResizeWidth = clampColumnWidth(resizeStartWidth + dx);
+    const raw = resizeStartWidth + dx
+    // Allow dragging into the collapse zone — shows snap-preview at strip width
+    _pendingResizeWidth = raw <= COLLAPSE_ZONE ? COLLAPSED_COL_WIDTH : clampColumnWidth(raw)
     if (_resizeRafId) return;
     _resizeRafId = requestAnimationFrame(() => {
       _resizeRafId = 0;
@@ -797,15 +829,39 @@
     if (_resizeRafId) {
       cancelAnimationFrame(_resizeRafId);
       _resizeRafId = 0;
-      // Commit the last pending width synchronously
       if (resizingColName) {
         columnWidths = { ...columnWidths, [resizingColName]: _pendingResizeWidth };
       }
     }
-    if (resizingColName && columnWidthsKey) {
-      saveColumnWidths(columnWidthsKey, columnWidths);
+    if (resizingColName) {
+      if ((columnWidths[resizingColName] ?? 0) <= COLLAPSE_ZONE) {
+        // Snap to collapsed — restore columnWidths to the pre-drag value so
+        // restoring the column brings it back at a sensible width.
+        const col = columns.find((c) => c.name === resizingColName)
+        const dt = col?.dataType ?? col?.data_type ?? ''
+        columnWidths = { ...columnWidths, [resizingColName]: clampColumnWidth(defaultColumnWidth(dt)) }
+        collapsedColumns = new Set([...collapsedColumns, resizingColName])
+        if (columnWidthsKey) saveColumnWidths(columnWidthsKey, columnWidths)
+      } else if (columnWidthsKey) {
+        saveColumnWidths(columnWidthsKey, columnWidths);
+      }
     }
     resizingColName = null;
+  }
+
+  /** Restore a column that was collapsed by dragging. */
+  function restoreColumn(colName) {
+    const next = new Set(collapsedColumns)
+    next.delete(colName)
+    collapsedColumns = next
+  }
+
+  /** Toggle pinning a column to the left. */
+  function toggleColumnPin(colName) {
+    const next = new Set(pinnedColumns)
+    if (next.has(colName)) next.delete(colName)
+    else next.add(colName)
+    pinnedColumns = next
   }
 
   // Reset focus and undo history when the displayed table changes.
@@ -888,7 +944,7 @@
 
     if (editingCell) return;
 
-    const visLen = visibleColumns.length;
+    const visLen = navigableColumns.length;
     const rowLen = rows.length;
     if (!rowLen || !visLen) return;
 
@@ -1099,15 +1155,15 @@
               <tr>
                 {#if showRowExpand}
                   <th
-                    class="studio-table-gutter"
-                    style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
+                    class="studio-table-gutter sticky z-[1] bg-panel"
+                    style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px; left: 0"
                     aria-label="Expand row"
                   ></th>
                 {/if}
                 {#if showSelection}
                   <th
-                    class="studio-table-gutter font-normal"
-                    style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px"
+                    class="studio-table-gutter sticky z-[1] bg-panel font-normal"
+                    style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px; left: {showRowExpand ? ROW_EXPAND_COL_WIDTH : 0}px"
                   >
                     <div class="studio-table-gutter-inner">
                       <Checkbox
@@ -1119,76 +1175,91 @@
                   </th>
                 {/if}
                 {#each visibleColumns as col (col.name)}
-                  {@const colW = widthForColumn(
-                    col.name,
-                    col.dataType ?? col.data_type ?? "",
-                  )}
+                  {@const isCollapsed = collapsedColumns.has(col.name)}
+                  {@const isPinned = pinnedColumns.has(col.name)}
+                  {@const colW = widthForColumn(col.name, col.dataType ?? col.data_type ?? "")}
+                  {@const pinLeft = pinnedOffsets.get(col.name) ?? 0}
                   {@const meta = colMeta.get(col.name)}
-                  <th
-                    class={cn(
-                      "group/th relative overflow-hidden px-3 py-1 text-left font-normal",
-                      resizingColName === col.name && "bg-accent/30",
-                    )}
-                    style="width: {colW}px; min-width: {colW}px; max-width: {colW}px"
-                  >
-                    <div class="flex min-w-0 items-center gap-1.5">
-                      <div class="flex min-w-0 flex-1 flex-col gap-px leading-tight">
-                        <div class="flex min-w-0 items-center gap-1">
-                          <span
-                            class="min-w-0 truncate font-mono text-ui-sm text-foreground"
-                            data-font="mono"
-                            title={col.name}>{col.name}</span
-                          >
-                          {#if meta && (meta.pk || meta.fk || meta.unique || meta.indexed || !meta.nullable)}
-                            <div class="flex shrink-0 items-center gap-[2px]">
-                              {#if meta.pk}
-                                <span
-                                  title="Primary key"
-                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-primary/10 text-primary"
-                                ><KeyRound class="size-[8px]" /></span>
-                              {/if}
-                              {#if meta.fk}
-                                <span
-                                  title={fkTooltip(col.name)}
-                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
-                                ><Link2 class="size-[8px]" /></span>
-                              {/if}
-                              {#if meta.unique && !meta.pk}
-                                <span
-                                  title="Unique"
-                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
-                                ><Fingerprint class="size-[8px]" /></span>
-                              {/if}
-                              {#if meta.indexed}
-                                <span
-                                  title="Indexed"
-                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
-                                ><Zap class="size-[8px]" /></span>
-                              {/if}
-                              {#if !meta.nullable && !meta.pk}
-                                <span
-                                  title="Not null"
-                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground/60"
-                                ><Circle class="size-[7px] fill-muted-foreground/40" /></span>
-                              {/if}
-                            </div>
-                          {/if}
-                        </div>
-                        <span
-                          class="block truncate font-mono text-ui-2xs text-muted-foreground"
-                          data-font="mono"
-                          title={col.dataType ?? col.data_type}
-                          >{col.dataType ?? col.data_type}</span
-                        >
+                  {#if isCollapsed}
+                    <!-- Collapsed column — thin clickable restore strip -->
+                    <th
+                      title="Click to restore '{col.name}'"
+                      class="group/collapsed relative cursor-pointer overflow-hidden bg-panel transition-colors hover:bg-accent/40"
+                      style="width: {COLLAPSED_COL_WIDTH}px; min-width: {COLLAPSED_COL_WIDTH}px; max-width: {COLLAPSED_COL_WIDTH}px"
+                      onclick={() => restoreColumn(col.name)}
+                    >
+                      <div class="flex h-full items-center justify-center">
+                        <span class="select-none font-mono text-[8px] leading-none text-muted-foreground/50 group-hover/collapsed:text-muted-foreground">···</span>
                       </div>
-                      <ArrowUpDown class="size-3 shrink-0 opacity-30" />
-                    </div>
-                    <ColumnResizeHandle
-                      onresizestart={() => startColumnResize(col.name)}
-                      onresize={applyColumnResize}
-                      onresizeend={endColumnResize}
-                    />
-                  </th>
+                    </th>
+                  {:else}
+                    <th
+                      class={cn(
+                        "group/th relative overflow-hidden px-3 py-1 text-left font-normal",
+                        resizingColName === col.name && "bg-accent/30",
+                        isPinned && "sticky z-[1] bg-panel shadow-[1px_0_0_hsl(var(--border)/0.6)]",
+                      )}
+                      style="width: {colW}px; min-width: {colW}px; max-width: {colW}px{isPinned ? `; left: ${pinLeft}px` : ''}"
+                    >
+                      <div class="flex min-w-0 items-center gap-1.5">
+                        <div class="flex min-w-0 flex-1 flex-col gap-px leading-tight">
+                          <div class="flex min-w-0 items-center gap-1">
+                            <span
+                              class="min-w-0 truncate font-mono text-ui-sm text-foreground"
+                              data-font="mono"
+                              title={col.name}>{col.name}</span
+                            >
+                            {#if meta && (meta.pk || meta.fk || meta.unique || meta.indexed || !meta.nullable)}
+                              <div class="flex shrink-0 items-center gap-[2px]">
+                                {#if meta.pk}
+                                  <span
+                                    title="Primary key"
+                                    class="inline-flex size-[13px] items-center justify-center rounded-sm bg-primary/10 text-primary"
+                                  ><KeyRound class="size-[8px]" /></span>
+                                {/if}
+                                {#if meta.fk}
+                                  <span
+                                    title={fkTooltip(col.name)}
+                                    class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                  ><Link2 class="size-[8px]" /></span>
+                                {/if}
+                                {#if meta.unique && !meta.pk}
+                                  <span
+                                    title="Unique"
+                                    class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                  ><Fingerprint class="size-[8px]" /></span>
+                                {/if}
+                                {#if meta.indexed}
+                                  <span
+                                    title="Indexed"
+                                    class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                  ><Zap class="size-[8px]" /></span>
+                                {/if}
+                                {#if !meta.nullable && !meta.pk}
+                                  <span
+                                    title="Not null"
+                                    class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground/60"
+                                  ><Circle class="size-[7px] fill-muted-foreground/40" /></span>
+                                {/if}
+                              </div>
+                            {/if}
+                          </div>
+                          <span
+                            class="block truncate font-mono text-ui-2xs text-muted-foreground"
+                            data-font="mono"
+                            title={col.dataType ?? col.data_type}
+                            >{col.dataType ?? col.data_type}</span
+                          >
+                        </div>
+                        <ArrowUpDown class="size-3 shrink-0 opacity-30" />
+                      </div>
+                      <ColumnResizeHandle
+                        onresizestart={() => startColumnResize(col.name)}
+                        onresize={applyColumnResize}
+                        onresizeend={endColumnResize}
+                      />
+                    </th>
+                  {/if}
                 {/each}
               </tr>
             </thead>
@@ -1231,8 +1302,8 @@
                   >
                     {#if showRowExpand}
                       <td
-                        class="studio-table-gutter studio-table-expand-gutter"
-                        style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px"
+                        class="studio-table-gutter studio-table-expand-gutter sticky z-[2] bg-panel"
+                        style="width: {ROW_EXPAND_COL_WIDTH}px; min-width: {ROW_EXPAND_COL_WIDTH}px; max-width: {ROW_EXPAND_COL_WIDTH}px; left: 0"
                         aria-expanded={isRowExpanded(idx)}
                         aria-label={isRowExpanded(idx)
                           ? "Collapse row JSON"
@@ -1266,8 +1337,8 @@
                     {/if}
                     {#if showSelection}
                       <td
-                        class="studio-table-gutter"
-                        style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px"
+                        class="studio-table-gutter sticky z-[2] bg-panel"
+                        style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px; max-width: {ROW_SELECT_COL_WIDTH}px; left: {showRowExpand ? ROW_EXPAND_COL_WIDTH : 0}px"
                         onclick={(e) => {
                           e.stopPropagation()
                           handleRowSelect(idx, e.shiftKey)
@@ -1284,6 +1355,13 @@
                     {/if}
                     {#each row as cell, colIdx}
                       {#if hiddenColumns.has(columns[colIdx]?.name)}<!-- skip hidden -->
+                      {:else if collapsedColumns.has(columns[colIdx]?.name)}
+                        <!-- Collapsed column — render a matching empty strip cell -->
+                        <td
+                          class="overflow-hidden border-r border-border/20 bg-panel/80 p-0"
+                          style="width: {COLLAPSED_COL_WIDTH}px; min-width: {COLLAPSED_COL_WIDTH}px; max-width: {COLLAPSED_COL_WIDTH}px"
+                          aria-hidden="true"
+                        ></td>
                       {:else}
                         {@const isEditing =
                           editingCell?.rowIdx === idx &&
@@ -1294,7 +1372,9 @@
                         {@const cellFk = foreignKeyForCell(idx, colIdx)}
                         {@const cellIsNull = row[colIdx] === null || row[colIdx] === undefined}
                         {@const activeFk = cellFk && !cellIsNull}
-                        {@const isFocusedCell = !isEditing && focusedRow === idx && focusedCol !== null && columns[colIdx]?.name === visibleColumns[focusedCol]?.name}
+                        {@const isFocusedCell = !isEditing && focusedRow === idx && focusedCol !== null && columns[colIdx]?.name === navigableColumns[focusedCol]?.name}
+                        {@const cellPinned = pinnedColumns.has(col?.name ?? '')}
+                        {@const cellPinLeft = cellPinned ? (pinnedOffsets.get(col?.name ?? '') ?? 0) : 0}
                         <td
                           data-col-idx={colIdx}
                           class={cn(
@@ -1306,8 +1386,9 @@
                               !isEditing &&
                               "group/fk cursor-pointer bg-accent/15 transition-colors hover:bg-accent/30",
                             isFocusedCell && "bg-primary/10 text-foreground",
+                            cellPinned && !isEditing && "sticky z-[1] bg-panel shadow-[1px_0_0_hsl(var(--border)/0.6)]",
                           )}
-                          style={isEditing ? "border: 0" : undefined}
+                          style={isEditing ? "border: 0" : cellPinned ? `left: ${cellPinLeft}px` : undefined}
                           data-font="mono"
                           onclick={(e) => {
                             if (
@@ -1571,6 +1652,24 @@
           <ExternalLink />
           Open {menuForeignKeyLabel}
           <ContextMenu.Shortcut>⌘↵</ContextMenu.Shortcut>
+        </ContextMenu.Item>
+      {/if}
+      <ContextMenu.Separator />
+      <ContextMenu.Item
+        onSelect={() => runMenuAction(() => toggleColumnPin(menuColName))}
+      >
+        {#if menuColPinned}
+          <PinOff />
+          Unpin column
+        {:else}
+          <Pin />
+          Pin column
+        {/if}
+      </ContextMenu.Item>
+      {#if menuColCollapsed}
+        <ContextMenu.Item onSelect={() => runMenuAction(() => restoreColumn(menuColName))}>
+          <ArrowUpDown />
+          Restore column
         </ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />

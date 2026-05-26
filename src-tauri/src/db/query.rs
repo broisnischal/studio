@@ -78,17 +78,21 @@ async fn fetch_table_column_enums(
     schema: &str,
     table: &str,
 ) -> Result<HashMap<String, Vec<String>>, String> {
+    // pg_attribute is far faster than information_schema.columns here — the view
+    // scans many system tables with multiple joins; pg_attribute is a direct heap scan.
     let rows = sqlx::query(
         r#"
-        SELECT c.column_name::text, e.enumlabel::text
-        FROM information_schema.columns c
-        JOIN pg_catalog.pg_type t
-          ON t.typname = c.udt_name AND t.typtype = 'e'
-        JOIN pg_catalog.pg_namespace n
-          ON n.oid = t.typnamespace AND n.nspname = c.udt_schema
-        JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
-        WHERE c.table_schema = $1 AND c.table_name = $2
-        ORDER BY c.column_name, e.enumsortorder
+        SELECT a.attname::text, e.enumlabel::text
+        FROM pg_attribute a
+        JOIN pg_type t ON t.oid = a.atttypid AND t.typtype = 'e'
+        JOIN pg_enum e ON e.enumtypid = t.oid
+        JOIN pg_class cl ON cl.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = cl.relnamespace
+        WHERE n.nspname = $1
+          AND cl.relname = $2
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+        ORDER BY a.attname, e.enumsortorder
         "#,
     )
     .bind(schema)
@@ -198,7 +202,6 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
     try_get_string!(NaiveDate);
     try_get_string!(NaiveTime);
     try_get_string!(Uuid);
-    try_get!(String);
 
     if type_name == "JSON" || type_name == "JSONB" {
         if let Ok(v) = row.try_get::<Option<serde_json::Value>, _>(idx) {
@@ -206,14 +209,10 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
         }
     }
 
-    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        return match v {
-            Some(bytes) => json!(format!("[{} bytes]", bytes.len())),
-            None => Value::Null,
-        };
-    }
-
-    // PostgreSQL enums and other text-compatible custom types (wire format is UTF-8).
+    // Use raw wire-protocol bytes for all remaining types (TEXT, VARCHAR, enums, domains…).
+    // Skipping try_get::<String>() avoids sqlx's runtime pg_catalog introspection for
+    // custom/enum types, which would fire a `SELECT enumlabel FROM pg_enum WHERE …` query
+    // per unique enum OID encountered — each one a full network round-trip.
     if let Ok(raw) = row.try_get_raw(idx) {
         if raw.is_null() {
             return Value::Null;
@@ -221,6 +220,14 @@ fn cell_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> Value {
         if let Ok(text) = <String as Decode<Postgres>>::decode(raw) {
             return json!(text);
         }
+    }
+
+    // Binary types (bytea) that aren't text-decodable.
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
+        return match v {
+            Some(bytes) => json!(format!("[{} bytes]", bytes.len())),
+            None => Value::Null,
+        };
     }
 
     Value::String(format!("<{type_name}>"))

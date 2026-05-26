@@ -1,4 +1,4 @@
-export const COL_WIDTH_MIN = 72
+export const COL_WIDTH_MIN = 48
 export const COL_WIDTH_MAX = 720
 
 /** @param {string} dataType */
