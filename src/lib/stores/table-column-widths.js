@@ -1,14 +1,20 @@
 const STORAGE_KEY = 'db-studio:column-widths'
 
+/** @type {Record<string, Record<string, number>> | null} */
+let _cache = null
+
 /** @returns {Record<string, Record<string, number>>} */
 function loadAll() {
+  if (_cache) return _cache
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return {}
+    if (!raw) { _cache = {}; return _cache }
     const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
+    _cache = (parsed && typeof parsed === 'object') ? parsed : {}
+    return _cache
   } catch {
-    return {}
+    _cache = {}
+    return _cache
   }
 }
 

@@ -54,6 +54,7 @@
   import UrlPreviewTooltip from "./UrlPreviewTooltip.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
   import RowExpandViewer from "./RowExpandViewer.svelte";
+  import JsonCellLightbox from "./JsonCellLightbox.svelte";
 
   let {
     columns = [],
@@ -165,17 +166,13 @@
   /** @type {string | null} */
   let lightboxUrl = $state(null);
 
-  /** @type {{ rowIdx: number, colIdx: number } | null} */
-  let expandedJsonCell = $state(null)
+  /** @type {{ value: unknown, colName: string } | null} */
+  let jsonLightbox = $state(null)
 
-  /** @param {number} rowIdx @param {number} colIdx @param {MouseEvent} e */
-  function openJsonCell(rowIdx, colIdx, e) {
+  /** @param {unknown} value @param {string} colName @param {MouseEvent} e */
+  function openJsonLightbox(value, colName, e) {
     e.stopPropagation()
-    if (expandedJsonCell?.rowIdx === rowIdx && expandedJsonCell?.colIdx === colIdx) {
-      expandedJsonCell = null
-    } else {
-      expandedJsonCell = { rowIdx, colIdx }
-    }
+    jsonLightbox = { value, colName }
   }
 
   /** @type {'image' | 'pdf'} */
@@ -1522,11 +1519,11 @@
                               <button
                                 type="button"
                                 class="group/json flex min-w-0 cursor-pointer items-center gap-1 truncate bg-transparent p-0 text-left"
-                                onclick={(e) => openJsonCell(idx, colIdx, e)}
-                                title="Click to expand JSON"
+                                onclick={(e) => openJsonLightbox(cell, col?.name ?? 'json', e)}
+                                title="Click to view JSON"
                               >
-                                <span class={cn("truncate font-mono", expandedJsonCell?.rowIdx === idx && expandedJsonCell?.colIdx === colIdx ? "text-primary" : "text-muted-foreground")}>{cellDisplay}</span>
-                                <Braces class={cn("size-3 shrink-0 transition-colors", expandedJsonCell?.rowIdx === idx && expandedJsonCell?.colIdx === colIdx ? "text-primary" : "text-muted-foreground/30 group-hover/json:text-muted-foreground")} />
+                                <span class="truncate font-mono text-muted-foreground">{cellDisplay}</span>
+                                <Braces class="size-3 shrink-0 text-muted-foreground/30 transition-colors group-hover/json:text-muted-foreground" />
                               </button>
                             {:else}
                             <span
@@ -1601,38 +1598,6 @@
                       {/if}
                     {/each}
                   </tr>
-                  {#if expandedJsonCell?.rowIdx === idx}
-                    {@const jsonColName = visibleColumns[expandedJsonCell.colIdx]?.name}
-                    {@const jsonValue = jsonColName != null ? row[columns.findIndex(c => c.name === jsonColName)] : null}
-                    <tr>
-                      {#if showSelection}
-                        <td class="studio-table-gutter" style="width: {ROW_SELECT_COL_WIDTH}px; min-width: {ROW_SELECT_COL_WIDTH}px" aria-hidden="true"></td>
-                      {/if}
-                      <td colspan={dataColSpan + (showRowExpand ? 1 : 0)} class="p-0 align-top">
-                        <div class="border-b border-border/50 bg-muted/20">
-                          <div class="flex items-center justify-between border-b border-border/40 px-3 py-1.5">
-                            <div class="flex items-center gap-1.5">
-                              <Braces class="size-3 text-muted-foreground/60" />
-                              <span class="font-mono text-[10px] font-medium text-muted-foreground">{jsonColName}</span>
-                            </div>
-                            <div class="flex items-center gap-0.5">
-                              <button
-                                class="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
-                                title="Copy JSON"
-                                onclick={() => { navigator.clipboard.writeText(JSON.stringify(jsonValue, null, 2)); toast.success('Copied') }}
-                              ><Copy class="size-3" /></button>
-                              <button
-                                class="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
-                                onclick={() => (expandedJsonCell = null)}
-                              ><ChevronDown class="size-3" /></button>
-                            </div>
-                          </div>
-                          <pre class="app-scroll max-h-64 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">{JSON.stringify(jsonValue, null, 2)}</pre>
-                        </div>
-                      </td>
-                    </tr>
-                  {/if}
-
                   {#if showRowExpand && isRowExpanded(idx)}
                     <tr>
                       <td
@@ -1820,5 +1785,10 @@
   onclose={() => {
     lightboxUrl = null;
   }}
+/>
+
+<JsonCellLightbox
+  data={jsonLightbox}
+  onclose={() => { jsonLightbox = null }}
 />
 

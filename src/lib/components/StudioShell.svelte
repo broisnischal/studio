@@ -152,6 +152,14 @@
   let aiEverOpened = $state(loadAiMode())
   $effect(() => { if (aiMode) aiEverOpened = true })
 
+  // Keep Monaco-heavy tabs mounted once opened so the editor isn't destroyed on tab switch.
+  let sqlEverOpened = $state(false)
+  let ormEverOpened = $state(false)
+  $effect(() => {
+    if (activeTab?.kind === 'sql') sqlEverOpened = true
+    if (activeTab?.kind === 'orm') ormEverOpened = true
+  })
+
   let columns = $state([])
   /** @type {Set<string>} */
   let hiddenColumns = $state(new Set())
@@ -183,8 +191,11 @@
   let tableToolbar = $state(null)
   /** @type {ReturnType<typeof setTimeout> | null} */
   let filterDebounceTimer = null
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let searchDebounceTimer = null
   onDestroy(() => {
     if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
   })
 
 
@@ -1068,7 +1079,11 @@
     rowSearch = value
     page = 1
     rawOffset = null
-    void loadRows()
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null
+      void loadRows()
+    }, SEARCH_DEBOUNCE_MS)
   }
 
   /** @param {TableFilter[]} filters */
@@ -1682,10 +1697,10 @@
   {activeSchema}
   {savedConnections}
   {activeConnectionId}
-  ontableselect={handleTableSelect}
-  onschemachange={handleSchemaChange}
-  onopensql={() => void focusSqlView()}
-  onopentable={() => void focusDataView()}
+  ontableselect={(name) => { if (aiMode) exitAiMode(); void handleTableSelect(name) }}
+  onschemachange={(schema) => { if (aiMode) exitAiMode(); handleSchemaChange(schema) }}
+  onopensql={() => { if (aiMode) exitAiMode(); void focusSqlView() }}
+  onopentable={() => { if (aiMode) exitAiMode(); void focusDataView() }}
   onopensettings={() => (showSettingsModal = true)}
   onopenconnection={() => (showConnectionModal = true)}
   ondisconnect={handleDisconnect}
@@ -1693,15 +1708,15 @@
   onopenai={() => openAiTab()}
   {aiMode}
   ontoggleaimode={() => aiMode ? exitAiMode() : enterAiMode()}
-  onopenorm={openOrmTab}
-  onopenSchema={openSchemaTab}
+  onopenorm={() => { if (aiMode) exitAiMode(); openOrmTab() }}
+  onopenSchema={() => { if (aiMode) exitAiMode(); openSchemaTab() }}
   onopenshortcuts={() => (showShortcutsModal = true)}
   oncheckupdate={() => void updateDialog?.checkNow()}
   onswitchdatabase={handleSwitchDatabase}
   {queryHistory}
   {savedQueries}
-  onqueryselect={(sql) => void openQueryInEditor(sql)}
-  onopenqueryhistory={() => void openQueryHistory()}
+  onqueryselect={(sql) => { if (aiMode) exitAiMode(); void openQueryInEditor(sql) }}
+  onopenqueryhistory={() => { if (aiMode) exitAiMode(); void openQueryHistory() }}
 />
 
 {#if autoConnecting}
@@ -1803,43 +1818,59 @@
           loading={loadingTables}
           onrefresh={async () => { await loadSchemas(); await loadTables() }}
         />
-      {:else if activeTab?.kind === 'orm'}
-        <OrmRunner
-          bind:code={ormCode}
-          bind:mode={ormMode}
-          columns={ormColumns}
-          rows={ormRows}
-          loading={ormLoading}
-          error={ormError}
-          queryMs={ormQueryMs}
-          schemaHints={sqlSchemaHints}
-          onrun={(d) => void runOrm(d)}
-        />
-      {:else if activeTab?.kind === 'sql'}
-        <SqlConsole
-          bind:sql={sqlText}
-          bind:queryHistoryVisible
-          {queryHistory}
-          {savedQueries}
-          columns={sqlColumns}
-          rows={sqlRows}
-          queryMs={sqlQueryMs}
-          message={sqlMessage}
-          loading={sqlLoading}
-          error={sqlError}
-          schemaHints={sqlSchemaHints}
-          schemaContext={aiSchemaContext}
-          onrun={runSql}
-          onmodk={() => {
-            commandOpen = true
-          }}
-          onmodenter={() => runSql()}
-          onmods={() => saveActiveTabState()}
-          onqueryrefresh={refreshQueryStores}
-          onhistoryselect={(sql) => void openQueryInEditor(sql)}
-          onsavequery={handleSaveQuery}
-        />
-      {:else if activeTab?.kind === 'table'}
+      {/if}
+
+      <!-- ORM tab: mount once, keep alive so Monaco is not destroyed on tab switch -->
+      {#if ormEverOpened}
+        <div
+          class={activeTab?.kind === 'orm' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={activeTab?.kind !== 'orm' || undefined}
+        >
+          <OrmRunner
+            bind:code={ormCode}
+            bind:mode={ormMode}
+            columns={ormColumns}
+            rows={ormRows}
+            loading={ormLoading}
+            error={ormError}
+            queryMs={ormQueryMs}
+            schemaHints={sqlSchemaHints}
+            onrun={(d) => void runOrm(d)}
+          />
+        </div>
+      {/if}
+
+      <!-- SQL tab: mount once, keep alive so Monaco is not destroyed on tab switch -->
+      {#if sqlEverOpened}
+        <div
+          class={activeTab?.kind === 'sql' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={activeTab?.kind !== 'sql' || undefined}
+        >
+          <SqlConsole
+            bind:sql={sqlText}
+            bind:queryHistoryVisible
+            {queryHistory}
+            {savedQueries}
+            columns={sqlColumns}
+            rows={sqlRows}
+            queryMs={sqlQueryMs}
+            message={sqlMessage}
+            loading={sqlLoading}
+            error={sqlError}
+            schemaHints={sqlSchemaHints}
+            schemaContext={aiSchemaContext}
+            onrun={runSql}
+            onmodk={() => { commandOpen = true }}
+            onmodenter={() => runSql()}
+            onmods={() => saveActiveTabState()}
+            onqueryrefresh={refreshQueryStores}
+            onhistoryselect={(sql) => void openQueryInEditor(sql)}
+            onsavequery={handleSaveQuery}
+          />
+        </div>
+      {/if}
+
+      {#if activeTab?.kind === 'table'}
         {#if error}
           <Alert.Root variant="destructive" class="mx-3 mt-2 shrink-0">
             <Alert.Description class="text-ui-sm">{error}</Alert.Description>
@@ -1922,7 +1953,9 @@
             />
           </div>
         {/if}
-      {:else}
+      {/if}
+
+      {#if !activeTab || activeTab.kind === 'welcome'}
         {@const isMac = navigator.platform.toUpperCase().includes('MAC')}
         {@const mod = isMac ? '⌘' : 'Ctrl'}
         <div class="flex flex-1 flex-col items-center justify-center gap-8 overflow-auto p-10">
