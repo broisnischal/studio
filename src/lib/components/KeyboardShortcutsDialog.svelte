@@ -20,6 +20,7 @@
         { keys: [mod, 'Tab'], desc: 'Next tab' },
         { keys: [mod, shift, 'Tab'], desc: 'Previous tab' },
         { keys: [mod, 'B'], desc: 'Toggle sidebar' },
+        { keys: [mod, shift, 'L'], desc: 'Toggle activity log' },
         { keys: [mod, shift, 'F'], desc: 'Focus table filter' },
       ],
     },

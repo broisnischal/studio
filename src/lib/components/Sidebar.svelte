@@ -16,6 +16,11 @@
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import Code2 from "@lucide/svelte/icons/code-2";
   import Bot from "@lucide/svelte/icons/bot";
+  import History from "@lucide/svelte/icons/history";
+  import ShieldCheck from "@lucide/svelte/icons/shield-check";
+  import DatabaseSwitcher from "./DatabaseSwitcher.svelte";
+  import CheckCircle from "@lucide/svelte/icons/check-circle";
+  import XCircle from "@lucide/svelte/icons/x-circle";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
@@ -112,6 +117,14 @@
     onopenorm = () => {},
     onopenaimode = () => {},
     aiMode = false,
+    /** @type {import('$lib/stores/query-history.js').QueryHistoryEntry[]} */
+    queryHistory = [],
+    onqueryselect = /** @type {(sql: string) => void} */ (() => {}),
+    onopensecurity = () => {},
+    onopenlogs = () => {},
+    /** @type {import('$lib/stores/connections.js').SavedConnection | null} */
+    connection = null,
+    onswitchtodb = /** @type {(db: string) => void} */ (() => {}),
   } = $props();
 
   let localFilter = $state(untrack(() => tableFilter));
@@ -139,6 +152,16 @@
   let tablesOpen = $state(_initial.tables ?? true);
   let viewsOpen = $state(_initial.views ?? false);
   let matViewsOpen = $state(_initial.matViews ?? false);
+  let logsOpen = $state(false);
+
+  /** @param {number} ts */
+  function timeAgo(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000)
+    if (s < 60) return `${s}s ago`
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+    return `${Math.floor(s / 86400)}d ago`
+  }
 
   $effect(() => { saveSidebarSection('tables', tablesOpen) })
   $effect(() => { saveSidebarSection('views', viewsOpen) })
@@ -630,74 +653,143 @@
 
 
           {/if}
+
+          <!-- ── Logs ─────────────────────────────────────────── -->
+          {#if logsOpen}
+            <div class="border-t border-sidebar-border">
+              <div class="flex items-center">
+                <button
+                  type="button"
+                  class="flex flex-1 items-center gap-1 px-2.5 pt-2 pb-1 text-left"
+                  onclick={() => { logsOpen = false }}
+                >
+                  <ChevronDown class="size-3 shrink-0 text-muted-foreground/60 transition-transform duration-150" />
+                  <span class="text-ui-2xs font-medium uppercase tracking-wide text-muted-foreground">Activity Log</span>
+                  {#if queryHistory.length > 0}
+                    <span class="ml-1 font-mono text-ui-2xs text-muted-foreground/60">{queryHistory.length}</span>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="mr-2 font-mono text-ui-2xs text-muted-foreground/50 hover:text-primary pt-1.5"
+                  onclick={onopenlogs}
+                  title="Open full activity log"
+                >Open all →</button>
+              </div>
+              <ul class="flex w-full flex-col gap-px px-1.5 pb-2">
+                {#if queryHistory.length === 0}
+                  <li class="px-3 py-3 text-center text-ui-xs text-muted-foreground">No queries yet</li>
+                {:else}
+                  {#each queryHistory.slice(0, 50) as entry (entry.id)}
+                    <li>
+                      <button
+                        type="button"
+                        class="group flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
+                        onclick={() => onqueryselect(entry.sql)}
+                        title={entry.sql}
+                      >
+                        <div class="flex w-full items-center gap-1.5 min-w-0">
+                          {#if entry.success === false}
+                            <XCircle class="size-2.5 shrink-0 text-destructive" />
+                          {:else}
+                            <CheckCircle class="size-2.5 shrink-0 text-primary/60" />
+                          {/if}
+                          <span class="min-w-0 flex-1 truncate font-mono text-ui-xs text-foreground/80">{entry.title}</span>
+                        </div>
+                        <div class="flex items-center gap-2 pl-4">
+                          <span class="font-mono text-ui-2xs text-muted-foreground/60">{timeAgo(entry.executedAt)}</span>
+                          {#if entry.queryMs != null}
+                            <span class="font-mono text-ui-2xs text-muted-foreground/50">{entry.queryMs}ms</span>
+                          {/if}
+                        </div>
+                      </button>
+                    </li>
+                  {/each}
+                {/if}
+              </ul>
+            </div>
+          {/if}
+
         </ScrollArea>
       </div>
     </div>
 
-    <footer
-      class="flex items-center gap-1 border-t border-sidebar-border px-2 py-2"
-    >
-      <span
-        class="min-w-0 flex-1 truncate px-1 text-ui-2xs text-muted-foreground"
-        title={connectionName || "Not connected"}
-      >
-        {connectionName || "DB Studio"}
-      </span>
-      <button
-        type="button"
-        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Schema Explorer"
-        onclick={onopenSchema}
-      >
-        <LayoutTemplate class="size-3.5" />
-      </button>
-      <button
-        type="button"
-        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="ORM Runner"
-        onclick={onopenorm}
-      >
-        <Code2 class="size-3.5" />
-      </button>
-      <button
-        type="button"
-        class={cn(
-          'inline-flex size-7 items-center justify-center rounded-md transition-colors',
-          aiMode
-            ? 'bg-primary/10 text-primary hover:bg-primary/15'
-            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-        )}
-        title={aiMode ? 'Close AI panel (⌘⌥E)' : 'Open AI panel (⌘⌥E)'}
-        onclick={onopenaimode}
-      >
-        <Bot class="size-3.5" />
-      </button>
-      <button
-        type="button"
-        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Command menu (⌘K)"
-        onclick={onopencommand}
-      >
-        <Command class="size-3.5" />
-      </button>
-      <button
-        type="button"
-        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Settings"
-        onclick={onopensettings}
-      >
-        <Settings class="size-3.5" />
-      </button>
+    <footer class="flex flex-col gap-0 border-t border-sidebar-border">
+      <!-- Database switcher -->
       {#if connectionName}
+        <div class="px-2 pt-2 pb-1">
+          <DatabaseSwitcher {connection} {onswitchtodb} />
+        </div>
+      {/if}
+
+      <!-- Icon toolbar -->
+      <div class="flex items-center gap-0.5 px-2 pb-2 pt-0.5">
         <button
           type="button"
-          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
-          title="Disconnect"
-          onclick={ondisconnect}
-        >
-          <Unplug class="size-3.5" />
-        </button>
-      {/if}
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          title="Schema Explorer"
+          onclick={onopenSchema}
+        ><LayoutTemplate class="size-3.5" /></button>
+
+        <button
+          type="button"
+          class={cn(
+            'inline-flex size-7 items-center justify-center rounded-md transition-colors',
+            logsOpen ? 'bg-primary/10 text-primary hover:bg-primary/15' : 'text-muted-foreground/70 hover:bg-accent hover:text-foreground',
+          )}
+          title="Activity log"
+          onclick={() => { logsOpen = !logsOpen }}
+        ><History class="size-3.5" /></button>
+
+        <button
+          type="button"
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          title="Security"
+          onclick={onopensecurity}
+        ><ShieldCheck class="size-3.5" /></button>
+
+        <button
+          type="button"
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          title="ORM Runner"
+          onclick={onopenorm}
+        ><Code2 class="size-3.5" /></button>
+
+        <button
+          type="button"
+          class={cn(
+            'inline-flex size-7 items-center justify-center rounded-md transition-colors',
+            aiMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : 'text-muted-foreground/70 hover:bg-accent hover:text-foreground',
+          )}
+          title={aiMode ? 'Close AI panel (⌘⌥E)' : 'Open AI panel (⌘⌥E)'}
+          onclick={onopenaimode}
+        ><Bot class="size-3.5" /></button>
+
+        <div class="flex-1"></div>
+
+        <button
+          type="button"
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          title="Command menu (⌘K)"
+          onclick={onopencommand}
+        ><Command class="size-3.5" /></button>
+
+        <button
+          type="button"
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+          title="Settings"
+          onclick={onopensettings}
+        ><Settings class="size-3.5" /></button>
+
+        {#if connectionName}
+          <button
+            type="button"
+            class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-destructive"
+            title="Disconnect"
+            onclick={ondisconnect}
+          ><Unplug class="size-3.5" /></button>
+        {/if}
+      </div>
     </footer>
   </aside>
   <ResizeHandle

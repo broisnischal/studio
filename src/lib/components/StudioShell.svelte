@@ -28,6 +28,9 @@
   import McpPanel from './McpPanel.svelte'
   import OrmRunner from './OrmRunner.svelte'
   import SchemaPage from './SchemaPage.svelte'
+  import SecurityPage from './SecurityPage.svelte'
+  import LogsPage from './LogsPage.svelte'
+  import LogPanel from './LogPanel.svelte'
   import { Button } from '$lib/components/ui/button/index.js'
   import * as Alert from '$lib/components/ui/alert/index.js'
   import {
@@ -50,11 +53,15 @@
     createAiTab,
     createSchemaTab,
     createOrmTab,
+    createSecurityTab,
+    createLogsTab,
     findTableTab,
     findSqlTab,
     findAiTab,
     findSchemaTab,
     findOrmTab,
+    findSecurityTab,
+    findLogsTab,
     findLastTableTab,
     tableTabTitle,
     cycleTabIndex,
@@ -76,6 +83,7 @@
     normalizeForeignKeys,
   } from '$lib/foreign-key-nav.js'
   import { loadLayout, saveLayout } from '$lib/stores/layout.js'
+  import { clampLogPanelWidth } from '$lib/stores/layout.js'
   import {
     getLastConnection,
     loadSavedConnections,
@@ -101,6 +109,7 @@
     listSavedQueries,
     createSavedQuery,
   } from '$lib/stores/query-history.js'
+  import { recordActivity } from '$lib/stores/activity-log.js'
 
   /** @typedef {import('$lib/studio-tabs.js').StudioTab} StudioTab */
   /** @typedef {import('$lib/studio-tabs.js').TableTabState} TableTabState */
@@ -130,6 +139,7 @@
   /** @type {import('./UpdateDialog.svelte').default | null} */
   let updateDialog = $state(null)
   let sidebarOpen = $state(loadLayout().navSidebarOpen)
+  let showLogPanel = $state(loadLayout().logPanelOpen)
 
   /** @type {StudioTab[]} */
   let tabs = $state([])
@@ -155,9 +165,13 @@
   // Keep Monaco-heavy tabs mounted once opened so the editor isn't destroyed on tab switch.
   let sqlEverOpened = $state(false)
   let ormEverOpened = $state(false)
+  let securityEverOpened = $state(false)
+  let logsEverOpened = $state(false)
   $effect(() => {
     if (activeTab?.kind === 'sql') sqlEverOpened = true
     if (activeTab?.kind === 'orm') ormEverOpened = true
+    if (activeTab?.kind === 'security') securityEverOpened = true
+    if (activeTab?.kind === 'logs') logsEverOpened = true
   })
 
   let columns = $state([])
@@ -574,6 +588,11 @@
     toggleSidebar()
   })
 
+  createHotkey('Mod+Shift+L', (e) => {
+    e.preventDefault()
+    toggleLogPanel()
+  })
+
   createHotkey('Mod+M', (e) => {
     e.preventDefault()
     cycleTheme()
@@ -783,6 +802,11 @@
     saveLayout({ navSidebarOpen: sidebarOpen })
   }
 
+  function toggleLogPanel() {
+    showLogPanel = !showLogPanel
+    saveLayout({ logPanelOpen: showLogPanel })
+  }
+
   /** @param {1 | -1} direction */
   function cycleTab(direction) {
     const idx = cycleTabIndex(tabs, activeTabIndex, direction)
@@ -857,6 +881,34 @@
     saveActiveTabState()
     dropWelcomeTabs()
     const tab = createOrmTab()
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+    clearTableEditor()
+  }
+
+  function openSecurityTab() {
+    const existing = findSecurityTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
+    saveActiveTabState()
+    dropWelcomeTabs()
+    const tab = createSecurityTab()
+    tabs = [...tabs, tab]
+    activeTabId = tab.id
+    clearTableEditor()
+  }
+
+  function openLogsTab() {
+    const existing = findLogsTab(tabs)
+    if (existing) {
+      void activateTab(existing.id)
+      return
+    }
+    saveActiveTabState()
+    dropWelcomeTabs()
+    const tab = createLogsTab()
     tabs = [...tabs, tab]
     activeTabId = tab.id
     clearTableEditor()
@@ -1279,6 +1331,7 @@
       foreignKeys = []
       rows = []
       total = 0
+      recordActivity({ type: 'row_fetch', title: `Failed to load ${activeTable}`, schema: activeSchema, table: activeTable ?? undefined, success: false, error: String(e) })
     } finally {
       loadingRows = false
     }
@@ -1292,6 +1345,7 @@
     const content = format === 'csv' ? rowsToCsv(columns, exportRows) : rowsToJson(columns, exportRows)
     const filename = buildExportFilename(activeTable, format)
     await saveExportFile(content, filename, format)
+    recordActivity({ type: 'export', title: `Exported ${activeTable} as ${format.toUpperCase()}`, schema: activeSchema, table: activeTable ?? undefined, rowCount: exportRows.length, success: true, detail: filename })
   }
 
   async function runSql() {
@@ -1315,6 +1369,7 @@
       sqlError = String(e)
     } finally {
       sqlLoading = false
+      recordActivity({ type: 'sql_exec', title: sqlRan.trim().slice(0, 80) + (sqlRan.trim().length > 80 ? '…' : ''), detail: sqlRan, durationMs: sqlQueryMs, rowCount: sqlRows.length || undefined, success: !sqlError, error: sqlError || undefined })
       if (persistConnectionId) {
         await recordQueryExecution(persistConnectionId, sqlRan, {
           success: !sqlError,
@@ -1327,6 +1382,7 @@
   }
 
   async function onConnected(conn, savedId) {
+    recordActivity({ type: 'connect', title: `Connected to ${conn.name ?? conn.database ?? conn.filePath ?? 'database'}`, success: true })
     connection = conn
     savedConnections = loadSavedConnections()
     // Persist last-used ID and bump timestamp
@@ -1396,6 +1452,7 @@
   }
 
   async function handleTableSelect(name) {
+    recordActivity({ type: 'table_open', title: `Opened ${name}`, schema: activeSchema, table: name, success: true })
     await openTableTab(activeSchema, name)
   }
 
@@ -1411,6 +1468,7 @@
   }
 
   async function handleDisconnect() {
+    recordActivity({ type: 'disconnect', title: `Disconnected from ${connection?.name ?? 'database'}`, success: true })
     try {
       await disconnectPostgres()
     } catch {
@@ -1487,11 +1545,13 @@
     if (primaryKeys.length === 0) return
 
     deletingRows = true
+    const _deleteStart = Date.now()
     try {
       const deleted = await deleteTableRows(activeSchema, activeTable, primaryKeys)
       if (deleted === 0) {
         throw new Error('No rows deleted (they may have changed)')
       }
+      recordActivity({ type: 'row_delete', title: `Deleted ${deleted} row${deleted === 1 ? '' : 's'} from ${activeTable}`, schema: activeSchema, table: activeTable, rowCount: deleted, durationMs: Date.now() - _deleteStart, success: true })
 
       const removedSet = new Set(removed)
       rows = rows.filter((_, i) => !removedSet.has(i))
@@ -1537,9 +1597,11 @@
     if (!activeTable) return
 
     insertingRow = true
+    const _insertStart = Date.now()
     try {
       const { row } = await insertTableRow(activeSchema, activeTable, values)
       insertRowOpen = false
+      recordActivity({ type: 'row_insert', title: `Inserted row into ${activeTable}`, schema: activeSchema, table: activeTable, durationMs: Date.now() - _insertStart, success: true })
 
       const hasActiveFilters =
         rowSearch.trim() !== '' || activeFilters(rowFilters).length > 0
@@ -1586,12 +1648,17 @@
     }
 
     savingCell = true
+    const _saveStart = Date.now()
     try {
       await updateTableCell(activeSchema, activeTable, pk, col.name, detail.value)
       rows[detail.rowIdx] = rows[detail.rowIdx].map(
         (cell, j) => (j === detail.colIdx ? detail.value : cell),
       )
       saveActiveTabState()
+      recordActivity({ type: 'row_save', title: `Updated ${col.name} in ${activeTable}`, schema: activeSchema, table: activeTable, durationMs: Date.now() - _saveStart, success: true })
+    } catch (e) {
+      recordActivity({ type: 'row_save', title: `Failed to update ${col.name} in ${activeTable}`, schema: activeSchema, table: activeTable, success: false, error: String(e) })
+      throw e
     } finally {
       savingCell = false
     }
@@ -1710,6 +1777,8 @@
   ontoggleaimode={() => aiMode ? exitAiMode() : enterAiMode()}
   onopenorm={() => { if (aiMode) exitAiMode(); openOrmTab() }}
   onopenSchema={() => { if (aiMode) exitAiMode(); openSchemaTab() }}
+  onopensecurity={() => { if (aiMode) exitAiMode(); openSecurityTab() }}
+  onopenlogs={() => { if (aiMode) exitAiMode(); openLogsTab() }}
   onopenshortcuts={() => (showShortcutsModal = true)}
   oncheckupdate={() => void updateDialog?.checkNow()}
   onswitchdatabase={handleSwitchDatabase}
@@ -1756,6 +1825,15 @@
       onopenorm={openOrmTab}
       {aiMode}
       onopenaimode={() => (aiMode ? exitAiMode() : enterAiMode())}
+      {queryHistory}
+      onqueryselect={(sql) => { if (aiMode) exitAiMode(); void openQueryInEditor(sql) }}
+      onopensecurity={() => { if (aiMode) exitAiMode(); openSecurityTab() }}
+      onopenlogs={() => { if (aiMode) exitAiMode(); openLogsTab() }}
+      {connection}
+      onswitchtodb={(dbName) => {
+        if (!connection) return
+        void handleSwitchDatabase({ ...connection, database: dbName, name: `${connection.host ?? connection.name}/${dbName}` })
+      }}
     />
   {/if}
 
@@ -1806,6 +1884,8 @@
         oncloseothers={closeOtherTabs}
         oncloseall={closeAllTabs}
         onnew={openWelcomeTab}
+        ontogglelogpanel={toggleLogPanel}
+        logPanelOpen={showLogPanel}
       />
 
       {#if activeTab?.kind === 'ai'}
@@ -1818,6 +1898,26 @@
           loading={loadingTables}
           onrefresh={async () => { await loadSchemas(); await loadTables() }}
         />
+      {/if}
+
+      <!-- Security tab - mount once, keep alive -->
+      {#if securityEverOpened}
+        <div
+          class={activeTab?.kind === 'security' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={activeTab?.kind !== 'security' || undefined}
+        >
+          <SecurityPage active={activeTab?.kind === 'security'} />
+        </div>
+      {/if}
+
+      <!-- Logs tab - mount once, keep alive -->
+      {#if logsEverOpened}
+        <div
+          class={activeTab?.kind === 'logs' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={activeTab?.kind !== 'logs' || undefined}
+        >
+          <LogsPage />
+        </div>
       {/if}
 
       <!-- ORM tab: mount once, keep alive so Monaco is not destroyed on tab switch -->
@@ -2065,4 +2165,8 @@
       {/if}
     {/if}
   </main>
+
+  {#if showLogPanel && !aiMode}
+    <LogPanel onclose={toggleLogPanel} />
+  {/if}
 </div>

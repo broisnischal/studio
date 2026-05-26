@@ -661,22 +661,21 @@
   <div
     class="order-2 ms-auto flex shrink-0 items-center gap-1 md:order-3 max-lg:max-w-[calc(100%-5rem)] max-lg:overflow-x-auto max-lg:[scrollbar-width:none] max-lg:[&::-webkit-scrollbar]:hidden"
   >
-    <span
-      class="hidden font-mono text-ui-xs text-muted-foreground tabular-nums xl:inline"
-      data-font="mono">{queryMs}ms</span
-    >
-    <span
-      class="hidden text-ui-sm text-muted-foreground tabular-nums lg:inline"
-      title="{from.toLocaleString('en-US')}–{to.toLocaleString(
-        'en-US',
-      )} of {total.toLocaleString('en-US')}"
-    >
-      {formatCompactCount(from)}–{formatCompactCount(to)} of {formatCompactCount(
-        total,
-      )}
-    </span>
+    {#if queryMs > 0}
+      <span
+        class="font-mono text-ui-xs text-muted-foreground tabular-nums"
+        data-font="mono"
+        title="Query execution time"
+      >{queryMs}ms</span>
+    {/if}
+    {#if total > 0}
+      <span
+        class="font-mono text-ui-xs text-muted-foreground tabular-nums"
+        title="{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {total.toLocaleString('en-US')} rows"
+      >{formatCompactCount(from)}–{formatCompactCount(to)} of {total.toLocaleString('en-US')}</span>
+    {/if}
 
-    <span class="mx-0.5 hidden h-4 w-px bg-border lg:inline"></span>
+    <span class="mx-0.5 h-4 w-px bg-border"></span>
 
     <Select.Root
       type="single"

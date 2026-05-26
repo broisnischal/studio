@@ -16,6 +16,7 @@
   import ArrowDownToLine from '@lucide/svelte/icons/arrow-down-to-line'
   import History from '@lucide/svelte/icons/history'
   import Bookmark from '@lucide/svelte/icons/bookmark'
+  import ShieldCheck from '@lucide/svelte/icons/shield-check'
   import * as Command from '$lib/components/ui/command/index.js'
   import { formatTableRowCount } from '$lib/table-list.js'
 
@@ -44,6 +45,8 @@
     ontoggleaimode = () => {},
     onopenorm = () => {},
     onopenSchema = () => {},
+    onopensecurity = () => {},
+    onopenlogs = () => {},
     onopenshortcuts = () => {},
     oncheckupdate = () => {},
     /** @param {import('$lib/stores/connections.js').SavedConnection} conn */
@@ -109,6 +112,14 @@
             <LayoutTemplate class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Schema Explorer</span>
             <Command.Shortcut keys="⌘⇧E" />
+          </Command.Item>
+          <Command.Item value="open security roles users policies rls row level" onSelect={() => run(onopensecurity)}>
+            <ShieldCheck class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Security</span>
+          </Command.Item>
+          <Command.Item value="open activity log events history operations" onSelect={() => run(onopenlogs)}>
+            <History class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">Activity Log</span>
           </Command.Item>
         </Command.Group>
 

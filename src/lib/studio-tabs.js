@@ -1,4 +1,4 @@
-/** @typedef {'table' | 'sql' | 'welcome' | 'ai' | 'schema' | 'orm'} StudioTabKind */
+/** @typedef {'table' | 'sql' | 'welcome' | 'ai' | 'schema' | 'orm' | 'security' | 'logs'} StudioTabKind */
 
 /** @typedef {import('$lib/table-query.js').TableSort} TableSort */
 /** @typedef {import('$lib/table-query.js').TableFilter} TableFilter */
@@ -182,6 +182,24 @@ export function createOrmTab() {
   })
 }
 
+export function createSecurityTab() {
+  return /** @type {StudioTab} */ ({
+    id: nextTabId(),
+    kind: 'security',
+    title: 'Security',
+    state: null,
+  })
+}
+
+export function createLogsTab() {
+  return /** @type {StudioTab} */ ({
+    id: nextTabId(),
+    kind: 'logs',
+    title: 'Activity Log',
+    state: null,
+  })
+}
+
 /** @param {StudioTab[]} tabs */
 export function findAiTab(tabs) {
   return tabs.find((t) => t.kind === 'ai') ?? null
@@ -197,6 +215,16 @@ export function findOrmTab(tabs) {
   return tabs.find((t) => t.kind === 'orm') ?? null
 }
 
+/** @param {StudioTab[]} tabs */
+export function findSecurityTab(tabs) {
+  return tabs.find((t) => t.kind === 'security') ?? null
+}
+
+/** @param {StudioTab[]} tabs */
+export function findLogsTab(tabs) {
+  return tabs.find((t) => t.kind === 'logs') ?? null
+}
+
 /** @param {TableTabState} state */
 export function tableTabTitle(state) {
   if (!state.table) return 'Table'
@@ -210,6 +238,8 @@ export function tabDisplayTitle(tab) {
   if (tab.kind === 'ai') return 'AI Chat'
   if (tab.kind === 'schema') return 'Schema Explorer'
   if (tab.kind === 'orm') return 'ORM Runner'
+  if (tab.kind === 'security') return 'Security'
+  if (tab.kind === 'logs') return 'Activity Log'
   return tab.title
 }
 
