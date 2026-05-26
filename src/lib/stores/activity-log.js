@@ -21,18 +21,22 @@
 const MAX_ENTRIES = 300
 
 /** @type {ActivityEntry[]} */
-const _log = []
+let _log = []
 /** @type {((entries: ActivityEntry[]) => void)[]} */
 let _listeners = []
 let _rafId = 0
 
-/** Coalesce rapid bursts into a single rAF-batched notification. */
+/**
+ * Notify all subscribers with a fresh shallow copy so Svelte's equality
+ * check always sees a new reference and triggers re-renders. The copy is
+ * scheduled via rAF so rapid bursts coalesce into one update per frame.
+ */
 function scheduleNotify() {
   if (_rafId) return
   _rafId = requestAnimationFrame(() => {
     _rafId = 0
-    // Pass a stable reference — listeners should not mutate it
-    for (const fn of _listeners) fn(_log)
+    const snapshot = _log.slice() // shallow copy — new ref every frame
+    for (const fn of _listeners) fn(snapshot)
   })
 }
 
@@ -52,26 +56,17 @@ export function recordActivity(entry) {
   return full
 }
 
-/** @returns {ActivityEntry[]} */
-export function getActivityLog() {
-  return _log
-}
-
 export function clearActivityLog() {
-  _log.length = 0
+  _log = []
   scheduleNotify()
 }
 
 /**
- * Subscribe to log updates. The callback receives the same array reference
- * every time — do not mutate it. Returns an unsubscribe function.
  * @param {(entries: ActivityEntry[]) => void} fn
- * @returns {() => void}
+ * @returns {() => void} unsubscribe
  */
 export function subscribeActivityLog(fn) {
   _listeners = [..._listeners, fn]
-  fn(_log)
-  return () => {
-    _listeners = _listeners.filter((l) => l !== fn)
-  }
+  fn(_log.slice())
+  return () => { _listeners = _listeners.filter((l) => l !== fn) }
 }
