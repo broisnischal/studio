@@ -1,5 +1,7 @@
 <script>
   import { tick, onMount, onDestroy } from 'svelte'
+  import Sparkles from '@lucide/svelte/icons/sparkles'
+  import Loader2 from '@lucide/svelte/icons/loader-2'
   import Bot from '@lucide/svelte/icons/bot'
   import Send from '@lucide/svelte/icons/send'
   import Square from '@lucide/svelte/icons/square'
@@ -108,6 +110,8 @@
   // ── Settings ──────────────────────────────────────────────────────────────
   let settings = $state(loadAiSettings())
   let settingsOpen = $state(false)
+  /** @type {string | null} */
+  let imageViewerSrc = $state(null)
   /** @type {'model'|'skills'|'context'} */
   let settingsTab = $state('model')
 
@@ -1474,7 +1478,7 @@
             </button>
           {/if}
           <div class="flex items-center gap-1.5">
-            <Bot class="size-3.5 shrink-0 text-primary" />
+            <Sparkles class="size-3.5 shrink-0 text-primary" />
             <span class="text-ui-xs font-semibold">AI</span>
           </div>
           <div class="ml-auto flex items-center gap-0.5">
@@ -1503,7 +1507,18 @@
         </div>
 
         <!-- Messages -->
-        <div bind:this={scrollEl} onscroll={onScrollAreaScroll} class="app-scroll min-h-0 flex-1 overflow-y-auto relative">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div bind:this={scrollEl} onscroll={onScrollAreaScroll} class="app-scroll min-h-0 flex-1 overflow-y-auto relative"
+          onclick={(e) => {
+            const img = /** @type {HTMLElement} */ (e.target)?.closest?.('img')
+            if (img instanceof HTMLImageElement && img.closest('.prose-ai')) {
+              imageViewerSrc = img.src
+            }
+          }}
+          role="region"
+          aria-label="Chat messages"
+        >
           <div class={mode === 'full' ? 'mx-auto w-full max-w-6xl px-4 py-6 min-h-full flex flex-col' : 'px-3 py-3'}>
           {#if items.length === 0}
             <!-- Empty state with suggestions -->
@@ -1511,19 +1526,21 @@
               <div class="flex flex-col items-center {mode === 'full' ? 'gap-5' : 'gap-2'} text-center">
                 {#if mode === 'full'}
                   <div class="relative flex size-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/20 shadow-sm">
-                    <Bot class="size-8 text-primary" />
+                    <Sparkles class="size-8 text-primary" />
                   </div>
                 {:else}
-                  <Bot class="size-7 text-muted-foreground/25" />
+                  <Sparkles class="size-7 text-muted-foreground/25" />
                 {/if}
                 <div>
                   <p class="{mode === 'full' ? 'text-xl font-semibold' : 'text-ui-sm font-medium text-muted-foreground'}">{mode === 'full' ? 'How can I help?' : 'Ask anything about your database'}</p>
                   {#if mode === 'full'}
                     <p class="mt-1.5 max-w-sm text-ui-sm text-muted-foreground">Query data, explore schema, generate reports, and visualize insights.</p>
                   {/if}
+                  {#if schemaContext.activeTable}
                   <p class="{mode === 'full' ? 'mt-2 font-mono text-ui-xs text-muted-foreground/50' : 'text-ui-xs text-muted-foreground/60'}">
-                    {schemaContext.activeSchema}/{schemaContext.activeTable ?? '—'}
+                    {schemaContext.activeSchema}/{schemaContext.activeTable}
                   </p>
+                  {/if}
                 </div>
               </div>
 
@@ -1575,16 +1592,14 @@
                   </div>
 
                 {:else if item.kind === 'thinking'}
-                  <div class="flex items-center gap-2 text-ui-xs text-muted-foreground">
-                    <Bot class="size-3.5 shrink-0 text-primary/60" />
+                  <div class="flex items-center gap-2.5 text-ui-xs text-muted-foreground">
+                    <div class="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                      <Sparkles class="size-3 animate-pulse text-primary" />
+                    </div>
                     {#if aiStatusHint}
-                      <span>{aiStatusHint}</span>
+                      <span class="animate-pulse">{aiStatusHint}</span>
                     {:else}
-                      <span class="inline-flex gap-0.5">
-                        <span class="animate-bounce" style="animation-delay:0ms">·</span>
-                        <span class="animate-bounce" style="animation-delay:150ms">·</span>
-                        <span class="animate-bounce" style="animation-delay:300ms">·</span>
-                      </span>
+                      <span class="animate-pulse">Thinking…</span>
                     {/if}
                   </div>
 
@@ -1685,13 +1700,12 @@
                   </div>
 
                 {:else if item.kind === 'executing'}
-                  <div class="flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-1.5 text-ui-xs text-muted-foreground">
-                    <span class="inline-flex gap-0.5">
-                      <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]"></span>
-                      <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]"></span>
-                      <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:300ms]"></span>
-                    </span>
-                    <span class="min-w-0 flex-1 truncate font-mono">Executing: {item.sql}</span>
+                  <div class="flex items-center gap-2.5 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground">
+                    <Loader2 class="size-3.5 shrink-0 animate-spin text-primary/70" />
+                    <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span class="font-medium text-foreground/60">Executing</span>
+                      <span class="truncate font-mono text-[10px] text-muted-foreground/60">{item.sql}</span>
+                    </div>
                   </div>
 
                 {:else if item.kind === 'result'}
@@ -1808,38 +1822,34 @@
         {/if}
 
         <!-- Input -->
-        <div class="shrink-0 bg-background {mode === 'full' ? 'px-6 pb-6 pt-3' : 'px-3 pb-3 pt-2'}">
-          <div class="{mode === 'full' ? 'mx-auto w-full max-w-6xl' : ''}">
-
-            <!-- Context usage micro-indicator (shown when >50% used) -->
-            {#if contextStats.pct >= 50 && !hasPendingConfirm}
-              <div class="mb-1.5 flex items-center gap-2 px-1">
-                <div class="h-px flex-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    class={cn('h-full rounded-full', contextStats.pct >= 90 ? 'bg-destructive/70' : contextStats.pct >= 70 ? 'bg-amber-500/70' : 'bg-primary/50')}
-                    style="width: {contextStats.pct}%"
-                  ></div>
-                </div>
-                <span class="shrink-0 font-mono text-[10px] text-muted-foreground/40">{contextStats.pct}%</span>
-              </div>
-            {/if}
-
-            <!-- Main input card -->
+        <div class="shrink-0 {mode === 'full' ? 'px-6 pb-8 pt-2' : 'px-3 pb-4 pt-2'}">
+          <div class="{mode === 'full' ? 'mx-auto w-full max-w-2xl' : ''}">
+            <!-- Pill input -->
             <div class={cn(
-              'flex flex-col rounded-2xl border bg-background transition-all duration-150',
-              mode === 'full' ? 'shadow-lg shadow-black/5' : 'shadow-sm',
+              'flex items-end gap-2 rounded-full border px-3 py-2 transition-all duration-150',
+              mode === 'full' ? 'shadow-lg shadow-black/8' : 'shadow-sm',
               hasPendingConfirm
-                ? 'border-border opacity-60'
+                ? 'border-border/50 opacity-60'
                 : error
-                  ? 'border-destructive/40 focus-within:border-destructive/60 focus-within:ring-2 focus-within:ring-destructive/10'
-                  : 'border-border/80 focus-within:border-ring/60 focus-within:ring-2 focus-within:ring-ring/15',
+                  ? 'border-destructive/50 focus-within:border-destructive/70'
+                  : 'border-border/60 focus-within:border-ring/50 focus-within:ring-2 focus-within:ring-ring/10',
             )}>
+              <!-- + / context button -->
+              <button
+                type="button"
+                class="mb-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground"
+                onclick={() => { settingsOpen = true; settingsTab = 'context' }}
+                title="Context & settings"
+              >
+                <Plus class="size-4" />
+              </button>
+
               <!-- Textarea -->
               <textarea
                 bind:this={inputRef}
-                class="min-h-[52px] w-full flex-1 resize-none bg-transparent px-4 pt-3.5 pb-2 text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40 disabled:cursor-not-allowed"
-                style="height:auto;overflow-y:hidden;max-height:220px;overflow-y:auto"
-                placeholder={hasPendingConfirm ? 'Confirm or cancel the operation above…' : mode === 'full' ? 'Ask anything — query, visualise, or explore…' : 'Ask about your database…'}
+                class="min-h-[32px] flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40 disabled:cursor-not-allowed"
+                style="height:auto;max-height:180px;overflow-y:auto"
+                placeholder={hasPendingConfirm ? 'Confirm or cancel the operation above…' : 'What do you want to know?'}
                 rows={1}
                 value={inputText}
                 oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput(); pushHistory(inputText) }}
@@ -1847,81 +1857,70 @@
                 disabled={hasPendingConfirm}
               ></textarea>
 
-              <!-- Bottom bar -->
-              <div class="flex items-center gap-2 px-3 pb-2.5 pt-1">
-                <!-- Left: model + context badges -->
-                <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground select-none"
-                    onclick={() => { settingsOpen = true; settingsTab = 'model' }}
-                    title="Model settings"
-                  >
-                    <Cpu class="size-2.5" />
-                    {settings.model.split('/').pop()?.slice(0, 20) ?? settings.model}
-                  </button>
-                  {#if skills.length > 0}
-                    <button
-                      type="button"
-                      class="inline-flex items-center gap-1 rounded-md bg-primary/6 px-1.5 py-0.5 font-mono text-[10px] text-primary/70 transition-colors hover:bg-primary/12 select-none"
-                      onclick={() => { settingsOpen = true; settingsTab = 'skills' }}
-                      title="Manage skills"
-                    >
-                      <BookOpen class="size-2.5" />
-                      {skills.length}
-                    </button>
-                  {/if}
-                  {#if contextStats.messages > 0}
-                    <button
-                      type="button"
-                      class="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/50 transition-colors hover:bg-accent hover:text-muted-foreground select-none"
-                      onclick={() => { settingsOpen = true; settingsTab = 'context' }}
-                      title="Context usage"
-                    >
-                      <BarChart2 class="size-2.5" />
-                      {tokEst(contextStats.totalChars)}
-                    </button>
-                  {/if}
-                </div>
+              <!-- Model selector -->
+              <button
+                type="button"
+                class="mb-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground select-none"
+                onclick={() => { settingsOpen = true; settingsTab = 'model' }}
+                title="Model settings"
+              >
+                {settings.model.split('/').pop()?.split('-').slice(0,2).join('-') ?? settings.model}
+                <ChevronDown class="size-3 opacity-60" />
+              </button>
 
-                <!-- Right: stop or send -->
-                {#if loading}
-                  <button
-                    type="button"
-                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground/70 shadow-sm transition-colors hover:border-ring/60 hover:text-foreground active:scale-95"
-                    onclick={stop}
-                    aria-label="Stop generating"
-                    title="Stop (Esc)"
-                  >
-                    <Square class="size-2.5 fill-current" />
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    class={cn(
-                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95',
-                      inputText.trim() && !hasPendingConfirm
-                        ? 'bg-primary text-primary-foreground shadow-sm hover:opacity-90'
-                        : 'bg-muted/60 text-muted-foreground/30 cursor-not-allowed',
-                    )}
-                    disabled={hasPendingConfirm || !inputText.trim()}
-                    onclick={() => void send()}
-                    aria-label="Send"
-                  >
-                    <Send class="size-3" />
-                  </button>
-                {/if}
-              </div>
+              <!-- Send / Stop button -->
+              {#if loading}
+                <button
+                  type="button"
+                  class="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground/70 shadow-sm transition-colors hover:border-ring/60 hover:text-foreground active:scale-95"
+                  onclick={stop}
+                  aria-label="Stop"
+                  title="Stop (Esc)"
+                >
+                  <Square class="size-3 fill-current" />
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class={cn(
+                    'mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-full transition-all active:scale-95',
+                    inputText.trim() && !hasPendingConfirm
+                      ? 'bg-foreground text-background shadow-sm hover:opacity-85'
+                      : 'bg-muted/50 text-muted-foreground/25 cursor-not-allowed',
+                  )}
+                  disabled={hasPendingConfirm || !inputText.trim()}
+                  onclick={() => void send()}
+                  aria-label="Send"
+                >
+                  <Send class="size-3.5" />
+                </button>
+              {/if}
             </div>
 
-            <!-- Below input: shortcuts hint -->
-            <p class="mt-1.5 px-1 text-[10px] text-muted-foreground/35 {mode === 'full' ? 'text-center' : ''}">
-              {#if hasPendingConfirm}
-                Confirm or cancel the operation above
-              {:else}
-                ↵ send · ⇧↵ newline{mode !== 'full' ? ' · / focus' : ''}
+            <!-- Hint + context info row -->
+            <div class="mt-1.5 flex items-center justify-between px-3">
+              <p class="text-[10px] text-muted-foreground/30">
+                {#if hasPendingConfirm}
+                  Confirm or cancel above
+                {:else}
+                  ↵ send · ⇧↵ newline
+                {/if}
+              </p>
+              {#if contextStats.messages > 0}
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1 text-[10px] text-muted-foreground/30 transition-colors hover:text-muted-foreground/60 select-none"
+                  onclick={() => { settingsOpen = true; settingsTab = 'context' }}
+                  title="Context usage"
+                >
+                  <BarChart2 class="size-2.5" />
+                  {tokEst(contextStats.totalChars)}
+                  {#if contextStats.pct >= 70}
+                    <span class={contextStats.pct >= 90 ? 'text-destructive/60' : 'text-amber-500/60'}>· {contextStats.pct}%</span>
+                  {/if}
+                </button>
               {/if}
-            </p>
+            </div>
           </div>
         </div>
 
@@ -1972,20 +1971,20 @@
 
                 <!-- Endpoint -->
                 <div class="flex flex-col gap-1.5">
-                  <label class="text-ui-xs font-medium text-foreground">API Endpoint</label>
-                  <Input class="h-7 font-mono text-ui-xs" placeholder="https://api.mistral.ai/v1" bind:value={settings.baseUrl} />
+                  <label for="ai-endpoint" class="text-ui-xs font-medium text-foreground">API Endpoint</label>
+                  <Input id="ai-endpoint" class="h-7 font-mono text-ui-xs" placeholder="https://api.mistral.ai/v1" bind:value={settings.baseUrl} />
                 </div>
 
                 <!-- API key -->
                 <div class="flex flex-col gap-1.5">
-                  <label class="text-ui-xs font-medium text-foreground">API Key</label>
-                  <Input class="h-7 font-mono text-ui-xs" type="password" placeholder="sk-… (empty for Ollama/local)" bind:value={settings.apiKey} />
+                  <label for="ai-apikey" class="text-ui-xs font-medium text-foreground">API Key</label>
+                  <Input id="ai-apikey" class="h-7 font-mono text-ui-xs" type="password" placeholder="sk-… (empty for Ollama/local)" bind:value={settings.apiKey} />
                 </div>
 
                 <!-- Model -->
                 <div class="flex flex-col gap-1.5">
-                  <label class="text-ui-xs font-medium text-foreground">Model</label>
-                  <Input class="h-7 font-mono text-ui-xs" placeholder="mistral-small-latest" bind:value={settings.model} />
+                  <label for="ai-model" class="text-ui-xs font-medium text-foreground">Model</label>
+                  <Input id="ai-model" class="h-7 font-mono text-ui-xs" placeholder="mistral-small-latest" bind:value={settings.model} />
                 </div>
 
                 <!-- Presets -->
@@ -1993,13 +1992,16 @@
                   <p class="text-ui-xs font-medium text-muted-foreground">Quick presets</p>
                   <div class="grid grid-cols-2 gap-1.5">
                     {#each [
-                      { label: 'Mistral Small', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', tag: 'fast' },
-                      { label: 'Mistral Large', url: 'https://api.mistral.ai/v1', model: 'mistral-large-latest', tag: 'smart' },
+                      { label: 'Claude Haiku', url: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-haiku-4-5', tag: 'fast' },
+                      { label: 'Claude Sonnet', url: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet-4-5', tag: 'smart' },
                       { label: 'GPT-4o mini', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', tag: 'fast' },
                       { label: 'GPT-4o', url: 'https://api.openai.com/v1', model: 'gpt-4o', tag: 'smart' },
+                      { label: 'Mistral Small', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', tag: 'fast' },
+                      { label: 'Mistral Large', url: 'https://api.mistral.ai/v1', model: 'mistral-large-latest', tag: 'smart' },
                       { label: 'Ollama Llama3', url: 'http://localhost:11434/v1', model: 'llama3', tag: 'local' },
                       { label: 'Ollama Gemma3', url: 'http://localhost:11434/v1', model: 'gemma3', tag: 'local' },
                     ] as p (p.label)}
+
                       <button
                         type="button"
                         class={cn(
@@ -2051,16 +2053,17 @@
                   <div class="flex flex-col gap-2 rounded-lg border border-border bg-background p-3">
                     <p class="text-ui-xs font-medium">New skill</p>
                     <div class="flex flex-col gap-1.5">
-                      <label class="text-[10px] text-muted-foreground">Name *</label>
-                      <Input class="h-7 text-ui-xs" placeholder="e.g. postgres-best-practices" bind:value={newSkillName} />
+                      <label for="skill-name" class="text-[10px] text-muted-foreground">Name *</label>
+                      <Input id="skill-name" class="h-7 text-ui-xs" placeholder="e.g. postgres-best-practices" bind:value={newSkillName} />
                     </div>
                     <div class="flex flex-col gap-1.5">
-                      <label class="text-[10px] text-muted-foreground">Description</label>
-                      <Input class="h-7 text-ui-xs" placeholder="When to apply this skill" bind:value={newSkillDesc} />
+                      <label for="skill-desc" class="text-[10px] text-muted-foreground">Description</label>
+                      <Input id="skill-desc" class="h-7 text-ui-xs" placeholder="When to apply this skill" bind:value={newSkillDesc} />
                     </div>
                     <div class="flex flex-col gap-1.5">
-                      <label class="text-[10px] text-muted-foreground">Content (Markdown) *</label>
+                      <label for="skill-content" class="text-[10px] text-muted-foreground">Content (Markdown) *</label>
                       <textarea
+                        id="skill-content"
                         class="min-h-[100px] w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 font-mono text-ui-xs leading-relaxed text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/20 placeholder:text-muted-foreground/50"
                         placeholder="# My Skill&#10;&#10;Write rules, patterns, and guidelines in Markdown..."
                         bind:value={newSkillContent}
@@ -2210,6 +2213,43 @@
     {/if}
 </div>
 
+<!-- ── Image viewer ──────────────────────────────────────────────────────── -->
+{#if imageViewerSrc}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md"
+    onclick={() => (imageViewerSrc = null)}
+    onkeydown={(e) => e.key === 'Escape' && (imageViewerSrc = null)}
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+  >
+    <div class="relative flex flex-col items-center gap-3" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
+      <img
+        src={imageViewerSrc}
+        alt="Preview"
+        class="max-h-[80vh] max-w-[90vw] rounded-xl border border-border/40 object-contain shadow-2xl"
+      />
+      <div class="flex items-center gap-2">
+        <a
+          href={imageViewerSrc}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-background/80 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-sm transition-colors hover:border-border hover:text-foreground"
+          onclick={(e) => e.stopPropagation()}
+        >
+          <ZoomIn class="size-3" /> Open full size
+        </a>
+        <button
+          class="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-background/80 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur-sm transition-colors hover:border-border hover:text-foreground"
+          onclick={() => (imageViewerSrc = null)}
+        >
+          <X class="size-3" /> Close
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- ── Diagram fullscreen modal ──────────────────────────────────────────── -->
 {#if fullscreenDiagramCode}
   <!-- Backdrop -->
@@ -2296,12 +2336,15 @@
 
 <style>
   :global(.prose-ai) {
-    font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-    font-size: 1rem;
-    line-height: 1.75;
+    font-family: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, ui-sans-serif, sans-serif;
+    font-size: 0.9375rem;
+    line-height: 1.6;
     color: var(--foreground);
     word-break: break-word;
     font-optical-sizing: auto;
+    letter-spacing: -0.014em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   :global(.prose-ai > *:first-child) { margin-top: 0; }
   :global(.prose-ai > *:last-child) { margin-bottom: 0; }
@@ -2409,6 +2452,24 @@
     --border: unset;
   }
   :global(.mermaid-canvas.is-dragging) { cursor: grabbing; }
+
+  /* ── Inline images in AI responses ─────────────────────────────────────── */
+  :global(.prose-ai img) {
+    display: inline-block;
+    max-width: min(100%, 320px);
+    max-height: 200px;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    cursor: zoom-in;
+    margin: 0.25rem 0;
+    transition: opacity 0.15s, box-shadow 0.15s;
+    vertical-align: middle;
+  }
+  :global(.prose-ai img:hover) {
+    opacity: 0.9;
+    box-shadow: 0 4px 16px hsl(var(--foreground) / 0.12);
+  }
 
   :global(.mermaid-canvas svg) {
     display: block;

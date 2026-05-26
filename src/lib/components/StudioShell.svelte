@@ -149,6 +149,8 @@
   function loadAiMode() { try { return localStorage.getItem('db-studio:ai-mode') === '1' } catch { return false } }
   function saveAiMode(v) { try { localStorage.setItem('db-studio:ai-mode', v ? '1' : '0') } catch {} }
   let aiMode = $state(loadAiMode())
+  let aiEverOpened = $state(loadAiMode())
+  $effect(() => { if (aiMode) aiEverOpened = true })
 
   let columns = $state([])
   /** @type {Set<string>} */
@@ -520,9 +522,10 @@
   })
 
   createHotkey('Mod+W', (e) => {
-    if (!connection || !activeTabId) return
+    if (!connection) return
     e.preventDefault()
-    closeTab(activeTabId)
+    if (aiMode) { exitAiMode(); return }
+    if (activeTabId) closeTab(activeTabId)
   })
 
   createHotkey('Mod+T', (e) => {
@@ -1759,10 +1762,14 @@
         </p>
       </div>
     {:else}
-      <!-- Full-window AI chat — hides tabs and studio when active -->
-      {#if aiMode}
-        <div class="flex min-h-0 flex-1 flex-col">
+      <!-- Full-window AI chat — kept mounted after first open so state is preserved -->
+      {#if aiEverOpened}
+        <div
+          class={aiMode ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={!aiMode}
+        >
           <AiChat
+            schemaContext={{ ...aiSchemaContext, activeTable: null, columns: [], primaryKey: [], foreignKeys: [] }}
             {connectionId}
             isActive={aiMode}
             mode="full"
@@ -1770,6 +1777,10 @@
             onwritesql={(sql) => void handleAiWriteSql(sql)}
           />
         </div>
+      {/if}
+
+      {#if aiMode}
+        <!-- AI mode: tabs + content hidden above via always-mounted block -->
       {:else}
 
       <TabBar

@@ -224,18 +224,32 @@ jobs:
           $exe = "$dir/nsis/db-studio_${version}_x64-setup.exe"
           $zip = "$dir/nsis/db-studio_${version}_x64-setup.nsis.zip"
 
-          # Compress-Archive uses Deflate64 for large files, which Tauri's zip
-          # extractor doesn't support ("Compression method not supported").
-          # Use .NET ZipFile with CompressionLevel::Optimal (standard Deflate/method 8).
+          # Use NoCompression (Store = method 0) — universally supported by every
+          # ZIP implementation including Tauri's zip crate.
+          # Compress-Archive → Deflate64 (method 9) ❌ not supported by Tauri
+          # CompressionLevel::Optimal on newer .NET → may vary ❌ unreliable
+          # CompressionLevel::NoCompression → Store (method 0) ✅ always works
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $stream = [System.IO.Compression.ZipFile]::Open($zip, 'Create')
           [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $stream,
             $exe,
             [System.IO.Path]::GetFileName($exe),
-            [System.IO.Compression.CompressionLevel]::Optimal
+            [System.IO.Compression.CompressionLevel]::NoCompression
           ) | Out-Null
           $stream.Dispose()
+
+          # Verify the ZIP uses Store (method 0) — fail fast if something is wrong
+          $verify = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          $entry  = $verify.Entries[0]
+          $method = [int]$entry.CompressionMethod
+          $verify.Dispose()
+          Write-Host "ZIP entry: $($entry.Name)  compression method: $method"
+          if ($method -ne 0) {
+            Write-Error "Wrong compression method $method — expected 0 (Store/NoCompression)"
+            exit 1
+          }
+          Write-Host "✅ Compression method verified: Store (0) — Tauri compatible"
 
           npx tauri signer sign $zip
 

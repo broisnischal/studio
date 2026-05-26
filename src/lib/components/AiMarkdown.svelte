@@ -102,7 +102,4 @@
 
 <div class={cn('prose-ai', className, loading && 'prose-ai-loading')} use:copyButtons>
   {@html html}
-  {#if streaming}
-    <span class="ml-px inline-block h-[0.85em] w-px translate-y-px animate-pulse bg-foreground/70 align-middle"></span>
-  {/if}
 </div>
