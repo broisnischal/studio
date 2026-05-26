@@ -1,77 +1,98 @@
 <script>
-  import { tick } from 'svelte'
-  import { executeSql } from '$lib/api.js'
-  import Database from '@lucide/svelte/icons/database'
-  import HardDrive from '@lucide/svelte/icons/hard-drive'
-  import Check from '@lucide/svelte/icons/check'
-  import RefreshCw from '@lucide/svelte/icons/refresh-cw'
-  import ChevronUp from '@lucide/svelte/icons/chevron-up'
-  import Search from '@lucide/svelte/icons/search'
-  import X from '@lucide/svelte/icons/x'
-  import { cn } from '$lib/utils.js'
+  import { tick } from "svelte";
+  import { executeSql } from "$lib/api.js";
+  import Database from "@lucide/svelte/icons/database";
+  import HardDrive from "@lucide/svelte/icons/hard-drive";
+  import Check from "@lucide/svelte/icons/check";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import ChevronUp from "@lucide/svelte/icons/chevron-up";
+  import Search from "@lucide/svelte/icons/search";
+  import X from "@lucide/svelte/icons/x";
+  import { cn } from "$lib/utils.js";
 
   let {
     /** @type {import('$lib/stores/connections.js').SavedConnection | null} */
     connection = null,
     onswitchtodb = /** @type {(dbName: string) => void} */ (() => {}),
-  } = $props()
+  } = $props();
 
-  let open = $state(false)
+  let open = $state(false);
   /** @type {string[]} */
-  let databases = $state([])
-  let loading = $state(false)
-  let error = $state('')
-  let search = $state('')
+  let databases = $state([]);
+  let loading = $state(false);
+  let error = $state("");
+  let search = $state("");
   /** @type {HTMLButtonElement | null} */
-  let triggerEl = $state(null)
+  let triggerEl = $state(null);
   /** @type {HTMLDivElement | null} */
-  let panelEl = $state(null)
+  let panelEl = $state(null);
 
-  const currentDb = $derived(connection?.database ?? connection?.filePath ?? '')
-  const isPostgres = $derived(connection?.type === 'postgres' || connection?.type === 'mysql')
+  const currentDb = $derived(
+    connection?.database ?? connection?.filePath ?? "",
+  );
+  const isPostgres = $derived(
+    connection?.type === "postgres" || connection?.type === "mysql",
+  );
 
   const filtered = $derived(
-    search.trim() ? databases.filter((d) => d.toLowerCase().includes(search.toLowerCase())) : databases
-  )
+    search.trim()
+      ? databases.filter((d) => d.toLowerCase().includes(search.toLowerCase()))
+      : databases,
+  );
 
   async function fetchDatabases() {
-    if (!isPostgres) return
-    loading = true; error = ''
+    if (!isPostgres) return;
+    loading = true;
+    error = "";
     try {
       const result = await executeSql(
-        `SELECT datname FROM pg_catalog.pg_database WHERE datistemplate = false ORDER BY datname`
-      )
-      databases = (result?.rows ?? []).map((r) => String(r[0]))
+        `SELECT datname FROM pg_catalog.pg_database WHERE datistemplate = false ORDER BY datname`,
+      );
+      databases = (result?.rows ?? []).map((r) => String(r[0]));
     } catch (e) {
-      error = String(e); databases = []
-    } finally { loading = false }
+      error = String(e);
+      databases = [];
+    } finally {
+      loading = false;
+    }
   }
 
   async function openPanel() {
-    open = true; search = ''
-    if (databases.length === 0) await fetchDatabases()
-    await tick()
-    panelEl?.querySelector('input')?.focus()
+    open = true;
+    search = "";
+    if (databases.length === 0) await fetchDatabases();
+    await tick();
+    panelEl?.querySelector("input")?.focus();
   }
 
-  function close() { open = false; search = '' }
+  function close() {
+    open = false;
+    search = "";
+  }
 
   function switchTo(db) {
-    if (db === currentDb) { close(); return }
-    close(); onswitchtodb(db)
+    if (db === currentDb) {
+      close();
+      return;
+    }
+    close();
+    onswitchtodb(db);
   }
 
   $effect(() => {
-    if (!open) return
+    if (!open) return;
     function onDown(/** @type {PointerEvent} */ e) {
       if (
-        triggerEl && !triggerEl.contains(/** @type {Node} */(e.target)) &&
-        panelEl && !panelEl.contains(/** @type {Node} */(e.target))
-      ) close()
+        triggerEl &&
+        !triggerEl.contains(/** @type {Node} */ (e.target)) &&
+        panelEl &&
+        !panelEl.contains(/** @type {Node} */ (e.target))
+      )
+        close();
     }
-    document.addEventListener('pointerdown', onDown)
-    return () => document.removeEventListener('pointerdown', onDown)
-  })
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  });
 </script>
 
 <div class="relative">
@@ -80,20 +101,29 @@
     bind:this={triggerEl}
     type="button"
     class={cn(
-      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-      open ? 'bg-accent/35 text-foreground' : 'text-muted-foreground hover:bg-accent/25 hover:text-foreground',
+      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+      open
+        ? "bg-accent/35 text-foreground"
+        : "text-muted-foreground hover:bg-accent/25 hover:text-foreground",
     )}
-    onclick={() => open ? close() : openPanel()}
-    disabled={!isPostgres && connection?.type !== 'sqlite'}
+    onclick={() => (open ? close() : openPanel())}
+    disabled={!isPostgres && connection?.type !== "sqlite"}
   >
-    {#if connection?.type === 'sqlite'}
+    {#if connection?.type === "sqlite"}
       <HardDrive class="size-3.5 shrink-0 opacity-50" />
     {:else}
       <Database class="size-3.5 shrink-0 opacity-50" />
     {/if}
-    <span class="min-w-0 flex-1 truncate font-mono text-ui-xs">{currentDb || connection?.name || 'No database'}</span>
+    <span class="min-w-0 flex-1 truncate font-mono text-ui-xs"
+      >{currentDb || connection?.name || "No database"}</span
+    >
     {#if isPostgres}
-      <ChevronUp class={cn('size-3 shrink-0 opacity-40 transition-transform', !open && 'rotate-180')} />
+      <ChevronUp
+        class={cn(
+          "size-3 shrink-0 opacity-40 transition-transform",
+          !open && "rotate-180",
+        )}
+      />
     {/if}
   </button>
 
@@ -103,26 +133,16 @@
       bind:this={panelEl}
       class="absolute bottom-full left-0 right-0 z-50 mb-1 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-popover shadow-lg"
       style="max-height: min(300px,55vh)"
-      onkeydown={(e) => { if (e.key === 'Escape') close() }}
+      onkeydown={(e) => {
+        if (e.key === "Escape") close();
+      }}
     >
-      <!-- Panel header -->
-      <div class="flex shrink-0 items-center justify-between border-b border-border/50 px-2.5 py-2">
-        <div class="flex items-center gap-1.5">
-          <Database class="size-3 text-muted-foreground/60" />
-          <span class="font-mono text-ui-xs text-muted-foreground/70">{connection?.host ?? 'server'}</span>
-        </div>
-        <button
-          type="button"
-          class="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:text-foreground"
-          onclick={fetchDatabases}
-          title="Refresh"
-        ><RefreshCw class={cn('size-3', loading && 'animate-spin')} /></button>
-      </div>
-
       <!-- Search (only when >5 databases) -->
       {#if databases.length > 5}
         <div class="relative shrink-0 border-b border-border/40 px-2 py-1.5">
-          <Search class="pointer-events-none absolute top-1/2 left-4 size-3 -translate-y-1/2 text-muted-foreground/50" />
+          <Search
+            class="pointer-events-none absolute top-1/2 left-4 size-3 -translate-y-1/2 text-muted-foreground/50"
+          />
           <input
             type="text"
             placeholder="Filter…"
@@ -132,17 +152,26 @@
         </div>
       {/if}
 
-      <!-- List -->
       <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-1">
         {#if loading}
-          <div class="flex items-center justify-center gap-2 py-6 text-muted-foreground/50">
-            <RefreshCw class="size-3.5 animate-spin" /><span class="font-mono text-ui-xs">Loading…</span>
+          <div
+            class="flex items-center justify-center gap-2 py-6 text-muted-foreground/50"
+          >
+            <RefreshCw class="size-3.5 animate-spin" /><span
+              class="font-mono text-ui-xs">Loading…</span
+            >
           </div>
         {:else if error}
-          <div class="px-2 py-4 text-center font-mono text-ui-xs text-destructive/80">{error}</div>
+          <div
+            class="px-2 py-4 text-center font-mono text-ui-xs text-destructive/80"
+          >
+            {error}
+          </div>
         {:else if filtered.length === 0}
-          <div class="px-2 py-4 text-center font-mono text-ui-xs text-muted-foreground/50">
-            {search ? 'No match' : 'No databases found'}
+          <div
+            class="px-2 py-4 text-center font-mono text-ui-xs text-muted-foreground/50"
+          >
+            {search ? "No match" : "No databases found"}
           </div>
         {:else}
           {#each filtered as db (db)}
@@ -150,13 +179,22 @@
             <button
               type="button"
               class={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-                isCurrent ? 'bg-accent/15 text-foreground' : 'text-foreground/80 hover:bg-accent/25 hover:text-foreground',
+                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                isCurrent
+                  ? "bg-accent/15 text-foreground"
+                  : "text-foreground/80 hover:bg-accent/25 hover:text-foreground",
               )}
               onclick={() => switchTo(db)}
             >
-              <Database class={cn('size-3.5 shrink-0', isCurrent ? 'text-primary' : 'text-muted-foreground/40')} />
-              <span class="min-w-0 flex-1 truncate font-mono text-ui-xs">{db}</span>
+              <Database
+                class={cn(
+                  "size-3.5 shrink-0",
+                  isCurrent ? "text-primary" : "text-muted-foreground/40",
+                )}
+              />
+              <span class="min-w-0 flex-1 truncate font-mono text-ui-xs"
+                >{db}</span
+              >
               {#if isCurrent}
                 <Check class="size-3.5 shrink-0 text-primary" />
               {/if}
@@ -165,11 +203,19 @@
         {/if}
       </div>
 
-      <!-- Footer -->
-      <div class="shrink-0 border-t border-border/40 px-2.5 py-1.5">
+      <div
+        class="shrink-0 border-t border-border/40 px-2.5 py-1.5 flex items-center justify-between"
+      >
         <p class="font-mono text-ui-2xs text-muted-foreground/40">
-          {databases.length} database{databases.length === 1 ? '' : 's'}
+          {databases.length} database{databases.length === 1 ? "" : "s"}
         </p>
+        <button
+          type="button"
+          class="inline-flex size-5 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:text-foreground"
+          onclick={fetchDatabases}
+          title="Refresh"
+          ><RefreshCw class={cn("size-3", loading && "animate-spin")} /></button
+        >
       </div>
     </div>
   {/if}
