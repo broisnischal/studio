@@ -86,6 +86,7 @@
     connectPostgres,
     connectSqlite,
     connectD1,
+    connectMysql,
     listIndexes,
     listEnums,
   } from '$lib/api.js'
@@ -143,6 +144,11 @@
   let activeTable = $state(/** @type {string | null} */ (null))
   let tableFilter = $state('')
   let loadingTables = $state(false)
+
+  // AI Mode — full-screen chat, hides sidebar and tabs
+  function loadAiMode() { try { return localStorage.getItem('db-studio:ai-mode') === '1' } catch { return false } }
+  function saveAiMode(v) { try { localStorage.setItem('db-studio:ai-mode', v ? '1' : '0') } catch {} }
+  let aiMode = $state(loadAiMode())
 
   let columns = $state([])
   /** @type {Set<string>} */
@@ -496,7 +502,8 @@
   createHotkey('Mod+Shift+A', (e) => {
     if (!connection) return
     e.preventDefault()
-    openAiTab()
+    if (aiMode) exitAiMode()
+    else enterAiMode()
   })
 
   createHotkey('Mod+F', (e) => {
@@ -1350,6 +1357,7 @@
     try {
       if (last.type === 'sqlite') await connectSqlite(last)
       else if (last.type === 'd1') await connectD1(last)
+      else if (last.type === 'mysql') await connectMysql(last)
       else await connectPostgres(last)
       await onConnected(last, last.id)
       await refreshQueryStores()
@@ -1383,6 +1391,21 @@
     await openTableTab(activeSchema, name)
   }
 
+  function enterAiMode() {
+    if (!connection) return
+    if (!tabs.some((t) => t.kind === 'ai')) {
+      const tab = createAiTab()
+      tabs = [...tabs, tab]
+    }
+    aiMode = true
+    saveAiMode(true)
+  }
+
+  function exitAiMode() {
+    aiMode = false
+    saveAiMode(false)
+  }
+
   async function handleDisconnect() {
     try {
       await disconnectPostgres()
@@ -1411,9 +1434,10 @@
     // Connect to the chosen saved connection
     autoConnecting = true
     try {
-      const { connectPostgres, connectSqlite, connectD1 } = await import('$lib/api.js')
+      const { connectPostgres, connectSqlite, connectD1, connectMysql } = await import('$lib/api.js')
       if (conn.type === 'sqlite') await connectSqlite(conn)
       else if (conn.type === 'd1') await connectD1(conn)
+      else if (conn.type === 'mysql') await connectMysql(conn)
       else await connectPostgres(conn)
       await onConnected(conn, conn.id)
     } catch (e) {
@@ -1678,6 +1702,8 @@
   ondisconnect={handleDisconnect}
   onrefresh={handleRefresh}
   onopenai={() => openAiTab()}
+  {aiMode}
+  ontoggleaimode={() => aiMode ? exitAiMode() : enterAiMode()}
   onopenorm={openOrmTab}
   onopenSchema={openSchemaTab}
   onopenshortcuts={() => (showShortcutsModal = true)}
@@ -1704,7 +1730,7 @@
 
 
 <div class="flex h-full min-h-0 w-full overflow-hidden bg-background">
-  {#if sidebarOpen}
+  {#if sidebarOpen && !aiMode}
     <Sidebar
       connectionName={connection?.name ?? ''}
       {schemas}
@@ -1724,6 +1750,7 @@
       onopencommand={() => (commandOpen = true)}
       onopenSchema={openSchemaTab}
       onopenorm={openOrmTab}
+      onopenaimode={enterAiMode}
     />
   {/if}
 
@@ -1745,6 +1772,7 @@
         </p>
       </div>
     {:else}
+      {#if !aiMode}
       <TabBar
         {tabs}
         {activeTabId}
@@ -1754,22 +1782,26 @@
         oncloseall={closeAllTabs}
         onnew={openWelcomeTab}
       />
+      {/if}
 
       <!-- AI tab: always mounted once it exists so conversation state survives tab switches -->
-      {#if tabs.some((t) => t.kind === 'ai')}
+      {#if aiMode || tabs.some((t) => t.kind === 'ai')}
         <div
-          class={activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
-          inert={activeTab?.kind !== 'ai'}
+          class={aiMode || activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          inert={!aiMode && activeTab?.kind !== 'ai'}
         >
           <AiChat
             schemaContext={aiSchemaContext}
             {connectionId}
-            isActive={activeTab?.kind === 'ai'}
+            isActive={aiMode || activeTab?.kind === 'ai'}
+            mode={aiMode ? 'full' : 'tab'}
+            onexit={aiMode ? exitAiMode : null}
             onwritesql={(sql) => void handleAiWriteSql(sql)}
           />
         </div>
       {/if}
 
+      {#if !aiMode}
       {#if activeTab?.kind === 'ai'}
         <!-- handled by the always-mounted block above -->
       {:else if activeTab?.kind === 'schema'}
@@ -1877,6 +1909,7 @@
                 {rows}
                 {primaryKey}
                 {foreignKeys}
+                indexes={activeTable ? indexes.filter((i) => i.tableName === activeTable) : []}
                 {hiddenColumns}
                 columnWidthsKey={activeTable ? `${activeSchema}.${activeTable}` : undefined}
                 loading={loadingRows}
@@ -2004,6 +2037,7 @@
             <span class="font-mono">{mod}W close tab</span>
           </div>
         </div>
+      {/if}
       {/if}
     {/if}
   </main>

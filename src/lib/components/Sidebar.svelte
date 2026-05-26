@@ -15,6 +15,7 @@
   import Unplug from "@lucide/svelte/icons/unplug";
   import LayoutTemplate from "@lucide/svelte/icons/layout-template";
   import Code2 from "@lucide/svelte/icons/code-2";
+  import Bot from "@lucide/svelte/icons/bot";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
@@ -109,6 +110,7 @@
     ondisconnect = () => {},
     onopenSchema = () => {},
     onopenorm = () => {},
+    onopenaimode = () => {},
   } = $props();
 
   let localFilter = $state(untrack(() => tableFilter));
@@ -655,6 +657,14 @@
         onclick={onopenorm}
       >
         <Code2 class="size-3.5" />
+      </button>
+      <button
+        type="button"
+        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="AI Mode (⌘⇧A)"
+        onclick={onopenaimode}
+      >
+        <Bot class="size-3.5" />
       </button>
       <button
         type="button"

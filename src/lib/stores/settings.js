@@ -81,7 +81,7 @@ export function applySettings(settings) {
   setMode(dark ? 'dark' : 'light')
   appThemeId.set(theme)
   root.style.setProperty('--app-zoom', String(zoom))
-  root.style.setProperty('--app-font-size', `${Math.round(13 * zoom)}px`)
+  root.style.setProperty('--app-font-size', `${Math.round(14 * zoom)}px`)
 }
 
 let zoomListenerInstalled = false
@@ -125,6 +125,8 @@ function handleZoomKeydown(e) {
 /** Block Tauri webview zoom (Ctrl/Cmd + wheel) when hotkeys are enabled in the shell. */
 function handleZoomWheel(e) {
   if (e.ctrlKey || e.metaKey) {
+    // Let mermaid diagrams handle their own Ctrl+scroll zoom
+    if (/** @type {Element} */ (e.target)?.closest?.('.mermaid-canvas')) return
     e.preventDefault()
     e.stopPropagation()
   }

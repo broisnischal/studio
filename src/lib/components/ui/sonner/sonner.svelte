@@ -10,27 +10,26 @@
 
   let { ...restProps } = $props()
 
-  const toastSurface =
-    'group/toast pointer-events-auto relative flex w-full items-center gap-2.5 overflow-hidden rounded-md border border-border bg-popover px-3 py-2.5 text-popover-foreground shadow-[0_4px_16px_-2px_rgba(0,0,0,0.12),0_1px_4px_-1px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_20px_-2px_rgba(0,0,0,0.5),0_1px_6px_-1px_rgba(0,0,0,0.3)]'
-
+  const base =
+    'group/toast pointer-events-auto relative flex w-full items-center gap-3 overflow-hidden rounded-lg border border-border/80 bg-popover px-3.5 py-3 text-popover-foreground shadow-[0_4px_16px_-2px_rgba(0,0,0,0.1),0_1px_4px_-1px_rgba(0,0,0,0.06)] dark:shadow-[0_4px_24px_-2px_rgba(0,0,0,0.55),0_1px_6px_-1px_rgba(0,0,0,0.3)] before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:rounded-l-lg'
   const toastOptions = {
     unstyled: true,
     classes: {
-      toast: toastSurface,
-      title: 'font-medium leading-snug tracking-tight text-foreground',
-      description: 'leading-snug text-muted-foreground',
-      content: 'flex min-w-0 flex-1 flex-col gap-0.5',
-      icon: 'm-0 flex shrink-0 items-center self-center [&_svg]:pointer-events-none',
+      toast: base,
+      title: 'text-ui-xs font-semibold leading-snug tracking-tight text-foreground',
+      description: 'text-[11px] leading-snug text-muted-foreground',
+      content: 'flex min-w-0 flex-1 flex-col gap-[3px]',
+      icon: 'm-0 flex shrink-0 items-center self-start pt-px [&_svg]:pointer-events-none',
       actionButton:
         'shrink-0 rounded bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90',
       cancelButton:
         'shrink-0 rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80',
       closeButton:
-        '!absolute right-1.5 top-1.5 flex size-[18px] items-center justify-center rounded text-muted-foreground/50 opacity-0 transition-[opacity,background-color,color] hover:bg-accent hover:text-foreground group-hover/toast:opacity-100',
-      success: toastSurface,
-      error: toastSurface,
-      warning: toastSurface,
-      info: toastSurface,
+        '!absolute right-1.5 top-1.5 flex size-[18px] items-center justify-center rounded text-muted-foreground/40 opacity-0 transition-[opacity,background-color,color] hover:bg-accent hover:text-foreground group-hover/toast:opacity-100',
+      success: `${base} before:bg-emerald-500`,
+      error: `${base} before:bg-destructive`,
+      warning: `${base} before:bg-amber-500`,
+      info: `${base} before:bg-blue-500`,
     },
   }
 </script>

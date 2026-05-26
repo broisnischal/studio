@@ -328,7 +328,7 @@ async fn list_tables_mysql(pool: &MySqlPool, schema: &str) -> Result<Vec<TableIn
         .filter_map(|r| {
             let name: String = r.try_get(0).ok()?;
             let ty: String = r.try_get(1).unwrap_or_else(|_| "BASE TABLE".to_string());
-            let row_count: i64 = r.try_get::<Option<i64>, _>(2).unwrap_or(None).unwrap_or(0);
+            let row_count: i64 = r.try_get::<Option<u64>, _>(2).ok().flatten().unwrap_or(0) as i64;
             let kind = if ty == "VIEW" { "view" } else { "table" }.to_string();
             Some(TableInfo { name, kind, row_count })
         })

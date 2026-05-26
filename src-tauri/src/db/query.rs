@@ -37,11 +37,14 @@ async fn fetch_table_column_nullable(
     schema: &str,
     table: &str,
 ) -> Result<HashMap<String, bool>, String> {
+    // pg_attribute is much faster than information_schema.columns for this lookup
     let rows = sqlx::query(
         r#"
-        SELECT column_name::text, is_nullable::text
-        FROM information_schema.columns
-        WHERE table_schema = $1 AND table_name = $2
+        SELECT a.attname::text, NOT a.attnotnull AS is_nullable
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
         "#,
     )
     .bind(schema)
@@ -54,9 +57,9 @@ async fn fetch_table_column_nullable(
     for row in rows {
         if let (Ok(name), Ok(is_nullable)) = (
             row.try_get::<String, _>(0),
-            row.try_get::<String, _>(1),
+            row.try_get::<bool, _>(1),
         ) {
-            map.insert(name, is_nullable.eq_ignore_ascii_case("YES"));
+            map.insert(name, is_nullable);
         }
     }
     Ok(map)
@@ -308,18 +311,16 @@ async fn fetch_primary_key(
     schema: &str,
     table: &str,
 ) -> Result<Vec<String>, String> {
+    // pg_constraint is faster than information_schema for primary key lookups
     let rows = sqlx::query(
         r#"
-        SELECT kcu.column_name::text
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-         AND tc.table_name = kcu.table_name
-        WHERE tc.constraint_type = 'PRIMARY KEY'
-          AND tc.table_schema = $1
-          AND tc.table_name = $2
-        ORDER BY kcu.ordinal_position
+        SELECT a.attname::text
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE c.contype = 'p' AND n.nspname = $1 AND t.relname = $2
+        ORDER BY array_position(c.conkey, a.attnum)
         "#,
     )
     .bind(schema)
@@ -533,12 +534,15 @@ async fn fetch_table_column_names(
 ) -> Result<Vec<String>, String> {
     validate_ident(schema)?;
     validate_ident(table)?;
+    // pg_attribute is faster than information_schema.columns
     let rows = sqlx::query(
         r#"
-        SELECT column_name::text
-        FROM information_schema.columns
-        WHERE table_schema = $1 AND table_name = $2
-        ORDER BY ordinal_position
+        SELECT a.attname::text
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+        ORDER BY a.attnum
         "#,
     )
     .bind(schema)
@@ -746,8 +750,16 @@ pub async fn get_table_rows(
 
     validate_ident(&schema)?;
     validate_ident(&table)?;
-    let table_columns = fetch_table_column_names(&pool, &schema, &table).await?;
     let filters = filters.unwrap_or_default();
+
+    // Only fetch column names when needed to build WHERE clause (search/filter).
+    // For the common case (no search, no filters) this saves one full round-trip.
+    let has_search = search.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+    let table_columns = if has_search || !filters.is_empty() {
+        fetch_table_column_names(&pool, &schema, &table).await?
+    } else {
+        vec![]
+    };
     let where_clause = build_where(&table_columns, search.as_deref(), &filters)?;
     let order_by = build_order_by(
         &table_columns,

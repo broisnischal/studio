@@ -4,6 +4,11 @@
   import { Checkbox } from "$lib/components/ui/checkbox/index.js";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import ArrowUpDown from "@lucide/svelte/icons/arrow-up-down";
+  import KeyRound from "@lucide/svelte/icons/key-round";
+  import Link2 from "@lucide/svelte/icons/link-2";
+  import Zap from "@lucide/svelte/icons/zap";
+  import Fingerprint from "@lucide/svelte/icons/fingerprint";
+  import Circle from "@lucide/svelte/icons/circle";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Copy from "@lucide/svelte/icons/copy";
@@ -82,6 +87,12 @@
     columnWidthsKey = undefined,
     /** Set of column names to hide. Controlled externally (toolbar). */
     hiddenColumns = /** @type {Set<string>} */ (new Set()),
+    /**
+     * Indexes for this table (from listIndexes, already filtered to the current table).
+     * Used to show index/unique badges on column headers.
+     * @type {{ name: string, tableName: string, columns: string, indexType: string, isUnique: boolean, isPrimary: boolean }[]}
+     */
+    indexes = [],
   } = $props();
 
   /** @type {HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null} */
@@ -121,6 +132,13 @@
   let futureEdits = $state([]);
   /** True while focus is inside this table (container or any child). */
   let isTableFocused = $state(false);
+
+  // ── Virtual scroll ────────────────────────────────────────────────────────
+  const VIRTUAL_THRESHOLD = 500
+  const ROW_HEIGHT = 28
+  const OVERSCAN = 15
+  let _scrollTop = $state(0)
+  let _viewportHeight = $state(600)
 
   // ── URL preview / lightbox ────────────────────────────────────────────────
   /** @type {string | null} */
@@ -244,10 +262,20 @@
   /** @param {number} rowIdx */
   function scrollRowIntoView(rowIdx) {
     tick().then(() => {
-      tableContainer
-        ?.querySelector(`[data-row-idx="${rowIdx}"]`)
-        ?.scrollIntoView({ block: "nearest" });
-    });
+      const el = tableContainer?.querySelector(`[data-row-idx="${rowIdx}"]`)
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' })
+      } else if (useVirtual && tableContainer) {
+        const estimatedTop = rowIdx * ROW_HEIGHT
+        const ch = tableContainer.clientHeight
+        const st = tableContainer.scrollTop
+        if (estimatedTop < st) {
+          tableContainer.scrollTop = Math.max(0, estimatedTop - OVERSCAN * ROW_HEIGHT)
+        } else if (estimatedTop + ROW_HEIGHT > st + ch) {
+          tableContainer.scrollTop = estimatedTop - ch + ROW_HEIGHT + OVERSCAN * ROW_HEIGHT
+        }
+      }
+    })
   }
 
   const fkByColumn = $derived(
@@ -641,6 +669,33 @@
     columns.filter((c) => !hiddenColumns.has(c.name)),
   );
   const dataColSpan = $derived(visibleColumns.length);
+  const totalColSpan = $derived(
+    (showRowExpand ? 1 : 0) + (showSelection ? 1 : 0) + visibleColumns.length,
+  )
+  const useVirtual = $derived(rows.length > VIRTUAL_THRESHOLD && !embedded)
+  // Split into separate primitives so Svelte only re-runs the {#each} when an
+  // index actually crosses a row boundary (every 28px), not on every scroll pixel.
+  const virtualStart = $derived.by(() => {
+    if (!useVirtual) return 0
+    let start = Math.max(0, Math.floor(_scrollTop / ROW_HEIGHT) - OVERSCAN)
+    for (const idx of expandedRows) if (idx < start) start = Math.max(0, idx)
+    if (focusedRow !== null && focusedRow < start) start = Math.max(0, focusedRow)
+    if (editingCell && editingCell.rowIdx < start) start = Math.max(0, editingCell.rowIdx)
+    return start
+  })
+  const virtualEnd = $derived.by(() => {
+    if (!useVirtual) return rows.length - 1
+    let end = Math.min(
+      rows.length - 1,
+      Math.ceil((_scrollTop + _viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+    )
+    for (const idx of expandedRows) if (idx > end) end = Math.min(rows.length - 1, idx)
+    if (focusedRow !== null && focusedRow > end) end = Math.min(rows.length - 1, focusedRow)
+    if (editingCell && editingCell.rowIdx > end) end = Math.min(rows.length - 1, editingCell.rowIdx)
+    return end
+  })
+  const virtualTopPad = $derived(virtualStart * ROW_HEIGHT)
+  const virtualBottomPad = $derived((rows.length - 1 - virtualEnd) * ROW_HEIGHT)
 
   const allSelected = $derived(
     rows.length > 0 && selected.size === rows.length,
@@ -649,6 +704,37 @@
     selected.size > 0 && selected.size < rows.length,
   );
   const hasPrimaryKey = $derived(primaryKey.length > 0);
+
+  /**
+   * Per-column display metadata: pk, fk, indexed, unique, nullable.
+   * Keyed by column name.
+   * @type {Map<string, { pk: boolean, fk: boolean, indexed: boolean, unique: boolean, nullable: boolean }>}
+   */
+  const colMeta = $derived.by(() => {
+    /** @type {Map<string, { pk: boolean, fk: boolean, indexed: boolean, unique: boolean, nullable: boolean }>} */
+    const map = new Map()
+    for (const col of columns) {
+      const isPk = primaryKey.includes(col.name)
+      const isFk = foreignKeys.some((fk) => fk.columns.includes(col.name))
+      // Parse index column strings (format: "col1, col2" or "col1,col2")
+      const colIndexes = indexes.filter((idx) =>
+        idx.columns.split(',').map((s) => s.trim()).includes(col.name),
+      )
+      const isUnique = colIndexes.some((idx) => idx.isUnique && !idx.isPrimary)
+      const isIndexed = colIndexes.some((idx) => !idx.isPrimary && !idx.isUnique)
+      const isNullable = col.nullable !== false
+      map.set(col.name, { pk: isPk, fk: isFk, indexed: isIndexed, unique: isUnique, nullable: isNullable })
+    }
+    return map
+  })
+
+  /** Build FK tooltip text for a column. */
+  function fkTooltip(colName) {
+    const fk = findForeignKeyForColumn(foreignKeys, colName)
+    if (!fk) return 'Foreign key'
+    const label = foreignKeyTargetLabel(fk)
+    return label ? `Foreign key → ${label}` : 'Foreign key'
+  }
 
   /** @param {number} idx */
   function rowClass(idx) {
@@ -747,6 +833,29 @@
     window.addEventListener("keydown", onCapture, true);
     return () => window.removeEventListener("keydown", onCapture, true);
   });
+
+  $effect(() => {
+    const container = tableContainer
+    if (!container || !useVirtual) return
+    _viewportHeight = container.clientHeight
+    _scrollTop = container.scrollTop
+    let rafId = 0
+    const onScroll = () => {
+      if (rafId) return
+      rafId = requestAnimationFrame(() => {
+        rafId = 0
+        _scrollTop = container.scrollTop
+      })
+    }
+    const ro = new ResizeObserver(() => { _viewportHeight = container.clientHeight })
+    container.addEventListener('scroll', onScroll, { passive: true })
+    ro.observe(container)
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      container.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+    }
+  })
 
   /** @param {KeyboardEvent} e */
   function handleTableKeydown(e) {
@@ -986,7 +1095,7 @@
                 />
               {/each}
             </colgroup>
-            <thead class="studio-chrome sticky top-0 z-10 bg-panel">
+            <thead class="studio-chrome sticky top-0 z-20 bg-panel">
               <tr>
                 {#if showRowExpand}
                   <th
@@ -1014,6 +1123,7 @@
                     col.name,
                     col.dataType ?? col.data_type ?? "",
                   )}
+                  {@const meta = colMeta.get(col.name)}
                   <th
                     class={cn(
                       "group/th relative overflow-hidden px-3 py-1 text-left font-normal",
@@ -1023,11 +1133,47 @@
                   >
                     <div class="flex min-w-0 items-center gap-1.5">
                       <div class="flex min-w-0 flex-1 flex-col gap-px leading-tight">
-                        <span
-                          class="block truncate font-mono text-ui-sm text-foreground"
-                          data-font="mono"
-                          title={col.name}>{col.name}</span
-                        >
+                        <div class="flex min-w-0 items-center gap-1">
+                          <span
+                            class="min-w-0 truncate font-mono text-ui-sm text-foreground"
+                            data-font="mono"
+                            title={col.name}>{col.name}</span
+                          >
+                          {#if meta && (meta.pk || meta.fk || meta.unique || meta.indexed || !meta.nullable)}
+                            <div class="flex shrink-0 items-center gap-[2px]">
+                              {#if meta.pk}
+                                <span
+                                  title="Primary key"
+                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-primary/10 text-primary"
+                                ><KeyRound class="size-[8px]" /></span>
+                              {/if}
+                              {#if meta.fk}
+                                <span
+                                  title={fkTooltip(col.name)}
+                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                ><Link2 class="size-[8px]" /></span>
+                              {/if}
+                              {#if meta.unique && !meta.pk}
+                                <span
+                                  title="Unique"
+                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                ><Fingerprint class="size-[8px]" /></span>
+                              {/if}
+                              {#if meta.indexed}
+                                <span
+                                  title="Indexed"
+                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground"
+                                ><Zap class="size-[8px]" /></span>
+                              {/if}
+                              {#if !meta.nullable && !meta.pk}
+                                <span
+                                  title="Not null"
+                                  class="inline-flex size-[13px] items-center justify-center rounded-sm bg-muted text-muted-foreground/60"
+                                ><Circle class="size-[7px] fill-muted-foreground/40" /></span>
+                              {/if}
+                            </div>
+                          {/if}
+                        </div>
                         <span
                           class="block truncate font-mono text-ui-2xs text-muted-foreground"
                           data-font="mono"
@@ -1048,7 +1194,13 @@
             </thead>
             {#if rows.length > 0}
               <tbody>
-                {#each rows as row, idx}
+                {#if useVirtual && virtualTopPad > 0}
+                  <tr aria-hidden="true" style="height: {virtualTopPad}px">
+                    <td colspan={totalColSpan} class="border-0 p-0"></td>
+                  </tr>
+                {/if}
+                {#each rows.slice(virtualStart, virtualEnd + 1) as row, relIdx (virtualStart + relIdx)}
+                  {@const idx = virtualStart + relIdx}
                   <tr
                     data-row-idx={idx}
                     class={rowClass(idx)}
@@ -1365,6 +1517,11 @@
                     </tr>
                   {/if}
                 {/each}
+                {#if useVirtual && virtualBottomPad > 0}
+                  <tr aria-hidden="true" style="height: {virtualBottomPad}px">
+                    <td colspan={totalColSpan} class="border-0 p-0"></td>
+                  </tr>
+                {/if}
               </tbody>
             {/if}
           </table>

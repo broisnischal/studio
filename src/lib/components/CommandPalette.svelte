@@ -38,6 +38,10 @@
     ondisconnect = () => {},
     onrefresh = () => {},
     onopenai = () => {},
+    /** Whether the app is currently in AI mode (fullscreen chat) */
+    aiMode = false,
+    /** Toggle between AI mode and dev mode */
+    ontoggleaimode = () => {},
     onopenorm = () => {},
     onopenSchema = () => {},
     onopenshortcuts = () => {},
@@ -89,22 +93,22 @@
           <Command.Item value="open table data browser" onSelect={() => run(onopentable)}>
             <Table2 class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Table data</span>
-            <Command.Shortcut>⌘⇧D</Command.Shortcut>
+            <Command.Shortcut keys="⌘⇧D" />
           </Command.Item>
           <Command.Item value="open sql editor query console" onSelect={() => run(onopensql)}>
             <Terminal class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">SQL editor</span>
-            <Command.Shortcut>⌘⇧S</Command.Shortcut>
+            <Command.Shortcut keys="⌘⇧S" />
           </Command.Item>
           <Command.Item value="open orm runner drizzle prisma query builder" onSelect={() => run(onopenorm)}>
             <Code2 class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">ORM Runner</span>
-            <Command.Shortcut>⌘⇧O</Command.Shortcut>
+            <Command.Shortcut keys="⌘⇧O" />
           </Command.Item>
           <Command.Item value="open schema explorer indexes enums views materialized" onSelect={() => run(onopenSchema)}>
             <LayoutTemplate class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Schema Explorer</span>
-            <Command.Shortcut>⌘⇧E</Command.Shortcut>
+            <Command.Shortcut keys="⌘⇧E" />
           </Command.Item>
         </Command.Group>
 
@@ -150,7 +154,15 @@
           <Command.Item value="ask ai assistant chat query" onSelect={() => run(onopenai)}>
             <Bot class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Ask AI</span>
-            <Command.Shortcut>⌘⇧A</Command.Shortcut>
+            <Command.Shortcut keys="⌘⇧A" />
+          </Command.Item>
+          <Command.Item
+            value={aiMode ? "exit ai mode switch to development dev mode studio" : "enter ai mode fullscreen chat only switch"}
+            onSelect={() => run(ontoggleaimode)}
+          >
+            <ArrowLeftRight class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">{aiMode ? 'Switch to Dev Mode' : 'Switch to AI Mode'}</span>
+            <Command.Shortcut keys="⌘⇧A" />
           </Command.Item>
         </Command.Group>
 
@@ -204,7 +216,7 @@
           <Command.Item value="keyboard shortcuts keybindings hotkeys help" onSelect={() => run(onopenshortcuts)}>
             <Keyboard class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Keyboard shortcuts</span>
-            <Command.Shortcut>?</Command.Shortcut>
+            <Command.Shortcut keys="?" />
           </Command.Item>
           <Command.Item value="check for updates upgrade version" onSelect={() => run(oncheckupdate)}>
             <ArrowDownToLine class="size-4 shrink-0 opacity-60" />

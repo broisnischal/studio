@@ -3,8 +3,6 @@
   import Bot from '@lucide/svelte/icons/bot'
   import Send from '@lucide/svelte/icons/send'
   import Square from '@lucide/svelte/icons/square'
-  import Undo2 from '@lucide/svelte/icons/undo-2'
-  import Redo2 from '@lucide/svelte/icons/redo-2'
   import Settings2 from '@lucide/svelte/icons/settings-2'
   import Trash2 from '@lucide/svelte/icons/trash-2'
   import Plus from '@lucide/svelte/icons/plus'
@@ -18,6 +16,19 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import PanelLeft from '@lucide/svelte/icons/panel-left'
+  import ArrowLeft from '@lucide/svelte/icons/arrow-left'
+  import Database from '@lucide/svelte/icons/database'
+  import Upload from '@lucide/svelte/icons/upload'
+  import BookOpen from '@lucide/svelte/icons/book-open'
+  import X from '@lucide/svelte/icons/x'
+  import BarChart2 from '@lucide/svelte/icons/bar-chart-2'
+  import Cpu from '@lucide/svelte/icons/cpu'
+  import Maximize2 from '@lucide/svelte/icons/maximize-2'
+  import Minimize2 from '@lucide/svelte/icons/minimize-2'
+  import Download from '@lucide/svelte/icons/download'
+  import ZoomIn from '@lucide/svelte/icons/zoom-in'
+  import ZoomOut from '@lucide/svelte/icons/zoom-out'
+  import RotateCcw from '@lucide/svelte/icons/rotate-ccw'
   import { Button } from '$lib/components/ui/button/index.js'
   import { Input } from '$lib/components/ui/input/index.js'
   import { Label } from '$lib/components/ui/label/index.js'
@@ -27,6 +38,7 @@
   import AiMarkdown from '$lib/components/AiMarkdown.svelte'
   import AiSqlBlock from '$lib/components/AiSqlBlock.svelte'
   import ShikiBlock from '$lib/components/ShikiBlock.svelte'
+  import AiChartRenderer from '$lib/components/AiChartRenderer.svelte'
   import {
     chatCompletionStream,
     MAX_AI_RETRIES,
@@ -34,9 +46,16 @@
     isDestructiveSql,
     parseAssistantMessage,
     buildSystemPrompt,
+    manageHistory,
+    classifyDbError,
+    filterSchemaForQuery,
+    stripThinkTags,
   } from '$lib/ai.js'
+  import { loadSkills, saveSkills, parseSkillFile } from '$lib/stores/ai-skills.js'
   import { renderMermaidSync, THEMES } from 'beautiful-mermaid'
   import { mermaidThemeFor, normalizeThemeId } from '$lib/themes/registry.js'
+  import mermaid from 'mermaid'
+  import { toast } from 'svelte-sonner'
   import { loadAiSettings, saveAiSettings } from '$lib/stores/ai-settings.js'
   import {
     listConversations,
@@ -53,6 +72,7 @@
    *   | { id: string, kind: 'assistant', parts: import('$lib/ai.js').AssistantPart[] }
    *   | { id: string, kind: 'streaming' }
    *   | { id: string, kind: 'result', sql: string, columns: {name:string,dataType?:string}[], rows: unknown[][], total: number, error: string|null, isSchema?: boolean, capped?: boolean }
+   *   | { id: string, kind: 'chart', spec: { type: string, title: string, data: object[], x_key: string, y_keys: {key:string,label:string}[] }, error: string|null }
    *   | { id: string, kind: 'confirm', sql: string, resolve: (ok: boolean) => void }
    *   | { id: string, kind: 'thinking' }
    *   | { id: string, kind: 'executing', sql: string }
@@ -71,6 +91,10 @@
     },
     connectionId = '',
     isActive = false,
+    /** 'tab' = embedded in tab, 'full' = fullscreen AI mode */
+    mode = /** @type {'tab' | 'full'} */ ('tab'),
+    /** Callback to exit fullscreen AI mode (null when in tab mode) */
+    onexit = /** @type {(() => void) | null} */ (null),
     /** @param {string} sql */
     onwritesql = (sql) => {},
   } = $props()
@@ -85,10 +109,55 @@
   // ── Settings ──────────────────────────────────────────────────────────────
   let settings = $state(loadAiSettings())
   let settingsOpen = $state(false)
+  /** @type {'model'|'skills'|'context'} */
+  let settingsTab = $state('model')
 
   function saveSettings() {
     saveAiSettings(settings)
-    settingsOpen = false
+  }
+
+  // ── Skills ────────────────────────────────────────────────────────────────
+  /** @type {import('$lib/stores/ai-skills.js').AiSkill[]} */
+  let skills = $state(loadSkills())
+
+  let newSkillOpen = $state(false)
+  let newSkillName = $state('')
+  let newSkillDesc = $state('')
+  let newSkillContent = $state('')
+
+  function createSkill() {
+    const name = newSkillName.trim()
+    const content = newSkillContent.trim()
+    if (!name || !content) return
+    const skill = { id: crypto.randomUUID(), name, description: newSkillDesc.trim(), content }
+    skills = [...skills, skill]
+    saveSkills(skills)
+    newSkillOpen = false
+    newSkillName = ''
+    newSkillDesc = ''
+    newSkillContent = ''
+  }
+
+  function removeSkill(/** @type {string} */ id) {
+    skills = skills.filter((s) => s.id !== id)
+    saveSkills(skills)
+  }
+
+  /** @param {Event} e */
+  function handleSkillFileUpload(e) {
+    const files = /** @type {HTMLInputElement} */ (e.target).files
+    if (!files?.length) return
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const content = /** @type {string} */ (ev.target?.result ?? '')
+        const skill = parseSkillFile(file.name, content)
+        skills = [...skills, skill]
+        saveSkills(skills)
+      }
+      reader.readAsText(file)
+    })
+    /** @type {HTMLInputElement} */ (e.target).value = ''
   }
 
   // ── Conversations list (IndexedDB) ─────────────────────────────────────────
@@ -209,12 +278,51 @@
   const isDraftChat = $derived(!activeConvId && items.length > 0)
   /** Tracks all (name:args) combos executed this turn — prevents exact duplicate calls */
   let executedCalls = new Set()
-  /** Tracks (name:args) combos that failed this turn — prevents retrying the same broken call */
-  let failedCalls = new Set()
+  /**
+   * Tracks failure count + last error per callKey this turn.
+   * @type {Map<string, { count: number, lastError: string }>}
+   */
+  let failureTracker = new Map()
 
   // ── Streaming & abort ──────────────────────────────────────────────────────
   /** Accumulates text for the currently-streaming assistant turn */
   let streamingContent = $state('')
+  /** Buffered full content waiting for next rAF before being written to state */
+  let _pendingStreamContent = ''
+  /** rAF handle for batching streamingContent updates (null = no pending update) */
+  let _streamRafId = /** @type {number | null} */ (null)
+
+  /**
+   * Throttle streaming content updates to one per animation frame.
+   * Without this every token triggers a Svelte re-render + regex derivation.
+   */
+  function scheduleStreamingUpdate(content) {
+    _pendingStreamContent = content
+    if (_streamRafId !== null) return
+    _streamRafId = requestAnimationFrame(() => {
+      _streamRafId = null
+      streamingContent = _pendingStreamContent
+    })
+  }
+
+  /** Flush any buffered streaming content immediately (called by stop() and finally block). */
+  function flushStreamingContent() {
+    if (_streamRafId !== null) {
+      cancelAnimationFrame(_streamRafId)
+      _streamRafId = null
+      streamingContent = _pendingStreamContent
+    }
+  }
+
+  /** Streaming display strips <think>...</think> blocks in real time */
+  const displayStreamingContent = $derived(
+    streamingContent
+      // Complete think blocks — hide entirely
+      .replace(/<think>[\s\S]*?<\/think>/g, '')
+      // Partial/open think block currently being written — hide from cursor onwards
+      .replace(/<think>[\s\S]*$/, '')
+      .trim()
+  )
   /** ID of the `streaming` ChatItem in `items` (null when not streaming) */
   let streamingId = $state(/** @type {string | null} */ (null))
   /** AbortController for the in-flight fetch; replaced each send() call */
@@ -222,8 +330,18 @@
 
   /** rAF handle for scroll debouncing during streaming */
   let rafId = /** @type {number | null} */ (null)
-  /** Scroll to bottom on the next animation frame (throttled for streaming). */
+  /** True when user has manually scrolled away from bottom during streaming */
+  let userScrolledUp = $state(false)
+
+  function onScrollAreaScroll() {
+    if (!scrollEl) return
+    const distFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
+    userScrolledUp = distFromBottom > 80
+  }
+
+  /** Scroll to bottom on the next animation frame (throttled; skipped if user scrolled up). */
   function scrollBottomSoon() {
+    if (userScrolledUp) return
     if (rafId !== null) return
     rafId = requestAnimationFrame(() => {
       rafId = null
@@ -231,11 +349,35 @@
     })
   }
 
+  function jumpToBottom() {
+    userScrolledUp = false
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+  }
+
   function stop() {
-    abortController?.abort()
+    if (!abortController || abortController.signal.aborted) return
+    abortController.abort()
+    // Flush any buffered content before reading it
+    flushStreamingContent()
+    // Immediately finalize UI — don't wait for the async finally block
+    const partial = streamingContent.trim()
+    const sid = streamingId
+    loading = false
+    streamingContent = ''
+    streamingId = null
+    items = items
+      .filter((i) => i.kind !== 'thinking' && i.kind !== 'executing')
+      .map((i) => {
+        if (sid && i.id === sid) {
+          return /** @type {ChatItem} */ ({ id: sid, kind: 'assistant', parts: parseAssistantMessage(partial || '…') })
+        }
+        return i
+      })
+      .filter((i) => i.kind !== 'streaming')
   }
 
   function abortCurrentRequest() {
+    if (_streamRafId !== null) { cancelAnimationFrame(_streamRafId); _streamRafId = null }
     if (abortController) {
       abortController.abort()
       abortController = null
@@ -243,6 +385,7 @@
     loading = false
     streamingId = null
     streamingContent = ''
+    _pendingStreamContent = ''
     // Remove in-flight ephemeral items so the UI doesn't show a frozen state
     items = items.filter((i) => i.kind !== 'thinking' && i.kind !== 'executing' && i.kind !== 'streaming')
   }
@@ -270,21 +413,69 @@
   const mermaidCache = new Map()
   const MERMAID_CACHE_MAX = 30
 
-  /** Render mermaid code to SVG. Results cached with LRU eviction (per app theme). */
+  /** `usecaseDiagram` is not a real Mermaid type — auto-correct it. */
+  function normalizeMermaidCode(code) {
+    return code.replace(/^usecaseDiagram\b/m, 'flowchart TD')
+  }
+
+  /** Reactive store for async-rendered diagrams (from full mermaid.js). */
+  /** @type {Record<string, string>} */
+  let _asyncDiagrams = $state({})
+  let _mermaidJsInit = false
+
+  async function _ensureMermaidJs() {
+    if (_mermaidJsInit) return
+    _mermaidJsInit = true
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' })
+  }
+
+  async function _renderWithMermaidJs(code, asyncKey) {
+    if (_asyncDiagrams[asyncKey] !== undefined) return
+    _asyncDiagrams[asyncKey] = '' // mark as pending
+    try {
+      await _ensureMermaidJs()
+      const id = `mermaid-${Math.random().toString(36).slice(2)}`
+      const { svg } = await mermaid.render(id, code)
+      _asyncDiagrams[asyncKey] = svg
+    } catch (e) {
+      const msg = String(e).replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      _asyncDiagrams[asyncKey] = `<div class="flex flex-col gap-1.5 p-3 rounded border border-destructive/30 bg-destructive/5"><p class="text-ui-xs font-medium text-destructive">Diagram render failed</p><p class="font-mono text-[10px] text-muted-foreground/70 whitespace-pre-wrap">${msg}</p></div>`
+    }
+  }
+
+  /** Render mermaid code to SVG. Tries beautiful-mermaid (sync), falls back to full mermaid.js (async). */
   function processMermaidSvg(code) {
     const themeId = normalizeThemeId(document.documentElement.dataset.theme)
-    const cacheKey = `${themeId}:${code}`
+    const normalized = normalizeMermaidCode(code)
+    const cacheKey = `${themeId}:${normalized}`
+
+    // Sync cache hit (beautiful-mermaid)
     if (mermaidCache.has(cacheKey)) return /** @type {string} */ (mermaidCache.get(cacheKey))
+
+    // Async cache (full mermaid.js)
+    const asyncKey = `async:${cacheKey}`
+    if (_asyncDiagrams[asyncKey] !== undefined) {
+      if (_asyncDiagrams[asyncKey] === '') {
+        return `<div class="flex items-center gap-2 p-4 text-ui-xs text-muted-foreground"><span class="size-3 animate-spin rounded-full border-2 border-border border-t-muted-foreground inline-block"></span>Rendering diagram…</div>`
+      }
+      return _asyncDiagrams[asyncKey]
+    }
+
+    // Try beautiful-mermaid (sync, fast, themed)
     try {
-      const svg = renderMermaidSync(code, resolveMermaidTheme(themeId))
+      const svg = renderMermaidSync(normalized, resolveMermaidTheme(themeId))
       if (mermaidCache.size >= MERMAID_CACHE_MAX) {
         mermaidCache.delete(/** @type {string} */ (mermaidCache.keys().next().value))
       }
       mermaidCache.set(cacheKey, svg)
       return svg
-    } catch (e) {
-      return `<pre class="text-xs text-destructive whitespace-pre-wrap">${String(e)}</pre>`
+    } catch {
+      // Fall through to full mermaid.js
     }
+
+    // Trigger async render and show loading spinner
+    void _renderWithMermaidJs(normalized, asyncKey)
+    return `<div class="flex items-center gap-2 p-4 text-ui-xs text-muted-foreground"><span class="size-3 animate-spin rounded-full border-2 border-border border-t-muted-foreground inline-block"></span>Rendering diagram…</div>`
   }
 
   /** Svelte action: applies live dark/light theming + pan/zoom to the mermaid canvas.
@@ -357,11 +548,18 @@
       applyTransform(true)
     }
 
+    const onZoomIn  = () => { scale = Math.min(10, scale * 1.25); applyTransform() }
+    const onZoomOut = () => { scale = Math.max(0.1, scale / 1.25); applyTransform() }
+    const onZoomReset = () => { scale = 1; tx = 0; ty = 0; applyTransform(true) }
+
     node.addEventListener('wheel', onWheel, { passive: false })
     node.addEventListener('mousedown', onDown)
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     node.addEventListener('dblclick', onDblClick)
+    node.addEventListener('diagram:zoomin', onZoomIn)
+    node.addEventListener('diagram:zoomout', onZoomOut)
+    node.addEventListener('diagram:reset', onZoomReset)
 
     return {
       destroy() {
@@ -372,8 +570,76 @@
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
         node.removeEventListener('dblclick', onDblClick)
+        node.removeEventListener('diagram:zoomin', onZoomIn)
+        node.removeEventListener('diagram:zoomout', onZoomOut)
+        node.removeEventListener('diagram:reset', onZoomReset)
       },
     }
+  }
+
+  // ── Diagram fullscreen ─────────────────────────────────────────────────────
+  /** @type {string | null} */
+  let fullscreenDiagramCode = $state(null)
+  /** @type {HTMLDivElement | null} */
+  let fullscreenCanvasEl = $state(null)
+
+  function openDiagramFullscreen(code) {
+    fullscreenDiagramCode = code
+  }
+
+  function closeDiagramFullscreen() {
+    fullscreenDiagramCode = null
+  }
+
+  function dispatchDiagramEvent(name) {
+    fullscreenCanvasEl?.dispatchEvent(new CustomEvent(name))
+  }
+
+  function exportDiagramSvg(code) {
+    const canvas = fullscreenCanvasEl ?? document.querySelector('.mermaid-canvas')
+    const svgEl = canvas?.querySelector('svg') ?? document.querySelector('.mermaid-canvas svg')
+    if (!svgEl) { toast.error('No diagram to export'); return }
+    const serializer = new XMLSerializer()
+    const svgStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svgEl)
+    const blob = new Blob([svgStr], { type: 'image/svg+xml' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = 'diagram.svg'; a.click()
+    URL.revokeObjectURL(url)
+    toast.success('SVG exported', { description: 'diagram.svg saved to your downloads' })
+  }
+
+  async function exportDiagramPng(code) {
+    const canvas = fullscreenCanvasEl ?? document.querySelector('.mermaid-canvas')
+    const svgEl = canvas?.querySelector('svg') ?? document.querySelector('.mermaid-canvas svg')
+    if (!svgEl) { toast.error('No diagram to export'); return }
+    const serializer = new XMLSerializer()
+    const svgStr = serializer.serializeToString(svgEl)
+    const svgBlob = new Blob([svgStr], { type: 'image/svg+xml' })
+    const url = URL.createObjectURL(svgBlob)
+    const img = new Image()
+    img.onload = () => {
+      const c = document.createElement('canvas')
+      const w = svgEl.viewBox.baseVal.width || svgEl.clientWidth || 800
+      const h = svgEl.viewBox.baseVal.height || svgEl.clientHeight || 600
+      c.width = w * 2; c.height = h * 2  // 2x for retina
+      const ctx2 = c.getContext('2d')
+      if (!ctx2) { URL.revokeObjectURL(url); return }
+      ctx2.fillStyle = '#ffffff'
+      ctx2.fillRect(0, 0, c.width, c.height)
+      ctx2.drawImage(img, 0, 0, c.width, c.height)
+      URL.revokeObjectURL(url)
+      c.toBlob((b) => {
+        if (!b) { toast.error('Failed to export PNG'); return }
+        const pngUrl = URL.createObjectURL(b)
+        const a = document.createElement('a')
+        a.href = pngUrl; a.download = 'diagram.png'; a.click()
+        URL.revokeObjectURL(pngUrl)
+        toast.success('PNG exported', { description: 'diagram.png saved to your downloads' })
+      }, 'image/png')
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); toast.error('Failed to export PNG') }
+    img.src = url
   }
 
   /** @type {HTMLDivElement | null} */
@@ -446,8 +712,38 @@
   const hasPendingConfirm = $derived(items.some((i) => i.kind === 'confirm'))
   const suggestions = $derived(generateSuggestions(schemaContext))
 
-  /** System prompt memoized — only rebuilds when schemaContext changes */
-  const systemPrompt = $derived(buildSystemPrompt(schemaContext))
+  /** System prompt for the current AI turn — built fresh each send() with selective schema injection */
+  let turnSystemPrompt = $state('')
+
+  /**
+   * Session-level schema cache: key = "schema.table", value = column list.
+   * Accumulates across all turns so we only fetch each table once per session.
+   * Gets merged into allTableColumns when building the system prompt.
+   * @type {Record<string, {name:string, dataType:string, nullable?:boolean}[]>}
+   */
+  let fetchedSchemas = $state({})
+
+  // ── Context window stats ──────────────────────────────────────────────────
+  /** Rough token estimate: 1 token ≈ 4 chars (GPT/Mistral rule of thumb) */
+  function tokEst(chars) {
+    const t = Math.round(chars / 4)
+    if (t >= 10_000) return `~${(t / 1000).toFixed(0)}k`
+    if (t >= 1_000) return `~${(t / 1000).toFixed(1)}k`
+    return `~${t}`
+  }
+
+  const contextStats = $derived.by(() => {
+    const historyChars = apiHistory.reduce((s, m) => s + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length), 0)
+    const promptChars = turnSystemPrompt.length || 0
+    const totalChars = historyChars + promptChars
+    const maxChars = 120_000
+    const historyTokens = Math.round(historyChars / 4)
+    const promptTokens = Math.round(promptChars / 4)
+    const totalTokens = Math.round(totalChars / 4)
+    const maxTokens = Math.round(maxChars / 4)
+    const pct = Math.min(100, Math.round((totalTokens / maxTokens) * 100))
+    return { historyChars, promptChars, totalChars, historyTokens, promptTokens, totalTokens, maxChars, maxTokens, pct, messages: apiHistory.length }
+  })
 
   // ── AI sidebar visibility (persisted) ─────────────────────────────────────
   const AI_SIDEBAR_KEY = 'db-studio:ai-sidebar-open'
@@ -513,6 +809,7 @@
 
   async function scrollBottom() {
     await tick()
+    userScrolledUp = false
     if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
   }
 
@@ -546,6 +843,42 @@
     }
   }
 
+  /**
+   * Fetch column definitions for ALL tables in the active schema that aren't yet cached.
+   * After the first call this is a no-op (all tables cached). Stores in fetchedSchemas,
+   * NOT in apiHistory — gets merged into the system prompt each turn.
+   */
+  async function ensureFullSchemaCache() {
+    if (!schemaContext.tables?.length) return
+    const isMysql = schemaContext.dbType === 'mysql'
+    const sc = schemaContext.activeSchema
+
+    // Determine which tables we still need column data for
+    const combined = { ...schemaContext.allTableColumns, ...fetchedSchemas }
+    const missing = schemaContext.tables.filter((t) => !combined[`${sc}.${t.name}`])
+    if (!missing.length) return
+
+    try {
+      const scSafe = sc.replace(/'/g, "''")
+      // One query fetches all missing tables at once
+      const sql = isMysql
+        ? `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${scSafe}' ORDER BY TABLE_NAME, ORDINAL_POSITION`
+        : `SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${scSafe}' ORDER BY table_name, ordinal_position`
+      const data = await executeSql(sql)
+      /** @type {Record<string, {name:string, dataType:string, nullable:boolean}[]>} */
+      const byTable = {}
+      for (const row of (data.rows ?? [])) {
+        const key = `${sc}.${String(row[0])}`
+        if (!byTable[key]) byTable[key] = []
+        byTable[key].push({ name: String(row[1]), dataType: String(row[2]), nullable: String(row[3]).toUpperCase() === 'YES' })
+      }
+      // Merge into session cache (preserves any existing entries)
+      fetchedSchemas = { ...fetchedSchemas, ...byTable }
+    } catch {
+      // Non-fatal — AI will call describe_table if schema fetch fails
+    }
+  }
+
   async function send(/** @type {string} */ [overrideText] = []) {
     const text = (overrideText ?? inputText).trim()
     if (!text || loading || hasPendingConfirm) return
@@ -553,24 +886,50 @@
     aiStatusHint = ''
     if (!overrideText) { inputText = ''; resetInputHeight(); resetHistory() }
 
-    items = [...items, { id: uid(), kind: 'user', text }]
-    apiHistory = [...apiHistory, { role: 'user', content: text }]
+    items.push(/** @type {ChatItem} */ ({ id: uid(), kind: 'user', text }))
+    apiHistory.push({ role: 'user', content: text })
     await scrollBottom()
 
     const thinkingId = uid()
-    items = [...items, { id: thinkingId, kind: 'thinking' }]
+    items.push(/** @type {ChatItem} */ ({ id: thinkingId, kind: 'thinking' }))
     await scrollBottom()
 
     loading = true
     abortController = new AbortController()
     executedCalls = new Set()
-    failedCalls = new Set()
+    failureTracker = new Map()
+
+    // Proactively fetch column definitions for all tables into session cache
+    // only when the query looks like it's asking about data (not a trivial message).
+    const looksLikeDataQuery = text.length > 4 || /select|from|show|list|count|table|schema|column|insert|update|delete/i.test(text)
+    if (looksLikeDataQuery) await ensureFullSchemaCache()
+
+    // Build query-filtered system prompt for this turn (merge session cache)
+    const filteredCtx = filterSchemaForQuery({ ...schemaContext, allTableColumns: { ...schemaContext.allTableColumns, ...fetchedSchemas }, userSkills: skills }, text)
+    turnSystemPrompt = buildSystemPrompt(filteredCtx)
+
+    // Smart context management: sliding window + optional summarization
+    const { history: managedHistory, summarized } = await manageHistory(settings, apiHistory, {
+      maxChars: 120_000,
+      keepLastN: 10,
+      summarizeThreshold: 40_000,
+      onStatus: (msg) => { aiStatusHint = msg },
+    })
+    if (summarized) {
+      apiHistory = managedHistory
+      aiStatusHint = ''
+    } else {
+      apiHistory = managedHistory
+    }
+
     try {
       await runAiTurn(0)
       await persistCurrent()
     } catch (e) {
       if (/** @type {any} */ (e)?.name !== 'AbortError') error = String(e)
     } finally {
+      // Flush any rAF-buffered content before reading it
+      flushStreamingContent()
       // Finalize any in-progress streaming item (abort or error mid-stream)
       if (streamingId) {
         const partial = streamingContent.trim()
@@ -584,6 +943,7 @@
           )
         streamingId = null
         streamingContent = ''
+        _pendingStreamContent = ''
       } else {
         items = items.filter((i) => i.id !== thinkingId && i.kind !== 'executing')
       }
@@ -618,10 +978,11 @@
   /** @param {number} depth */
   async function runAiTurn(depth) {
     if (depth > 40) throw new Error('Too many AI iterations — aborting runaway execution')
+    if (abortController?.signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
     // Space out follow-up turns after tool calls to avoid burst rate limits
     if (depth > 0) {
-      await new Promise((r) => setTimeout(r, 500))
+      await new Promise((r) => setTimeout(r, 300))
       if (abortController?.signal.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
     }
 
@@ -633,7 +994,7 @@
 
     for await (const chunk of chatCompletionStream(
       settings,
-      [{ role: 'system', content: systemPrompt }, ...apiHistory],
+      [{ role: 'system', content: turnSystemPrompt }, ...apiHistory],
       AI_TOOLS,
       abortController?.signal,
       ({ attempt, waitMs }) => {
@@ -647,13 +1008,12 @@
         if (!itemId) {
           itemId = uid()
           streamingId = itemId
-          // Remove the thinking indicator the moment the first token arrives
-          items = [
-            ...items.filter((i) => i.kind !== 'thinking'),
-            { id: itemId, kind: 'streaming' },
-          ]
+          // Remove the thinking indicator the moment the first token arrives, then append streaming placeholder
+          const thinkIdx = items.findIndex((i) => i.kind === 'thinking')
+          if (thinkIdx >= 0) items.splice(thinkIdx, 1)
+          items.push(/** @type {ChatItem} */ ({ id: itemId, kind: 'streaming' }))
         }
-        streamingContent = fullContent
+        scheduleStreamingUpdate(fullContent)
         scrollBottomSoon()
       }
       if (chunk.toolCalls) {
@@ -661,10 +1021,19 @@
       }
     }
 
+    // Bail out immediately if the user stopped generation — stop() already finalized UI
+    if (abortController?.signal.aborted) {
+      throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
+    }
+
+    // Flush any buffered streaming content before finalizing
+    flushStreamingContent()
+
     // Promote the streaming placeholder to a finalized assistant item
-    if (itemId) {
+    if (itemId && streamingId) {
       streamingId = null
       streamingContent = ''
+      _pendingStreamContent = ''
       items = items.map((i) =>
         i.id === itemId
           ? /** @type {ChatItem} */ ({ id: itemId, kind: 'assistant', parts: parseAssistantMessage(fullContent) })
@@ -673,22 +1042,16 @@
     }
 
     if (toolCalls.length > 0) {
-      apiHistory = [
-        ...apiHistory,
-        { role: 'assistant', content: fullContent || null, tool_calls: toolCalls },
-      ]
+      apiHistory.push({ role: 'assistant', content: fullContent || null, tool_calls: toolCalls })
       for (const call of toolCalls) {
         await runToolCall(call)
       }
       await runAiTurn(depth + 1)
     } else if (fullContent) {
-      apiHistory = [...apiHistory, { role: 'assistant', content: fullContent }]
+      apiHistory.push({ role: 'assistant', content: fullContent })
       // Fallback: if no streaming item was created (non-streaming endpoint), add it now
       if (!itemId) {
-        items = [
-          ...items,
-          { id: uid(), kind: 'assistant', parts: parseAssistantMessage(fullContent) },
-        ]
+        items.push(/** @type {ChatItem} */ ({ id: uid(), kind: 'assistant', parts: parseAssistantMessage(fullContent) }))
         await scrollBottom()
       }
     }
@@ -698,13 +1061,16 @@
   async function runToolCall(call) {
     const callKey = `${call.function.name}:${call.function.arguments}`
     if (executedCalls.has(callKey)) {
-      const toolResult = JSON.stringify({ error: 'Duplicate call — this exact operation already ran this turn. Use the previous result.' })
-      apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+      apiHistory.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: 'Duplicate call — this exact operation already ran this turn. Use the previous result instead of calling again.' }) })
       return
     }
-    if (failedCalls.has(callKey)) {
-      const toolResult = JSON.stringify({ error: 'Repeated failed call — not retrying. Fix the query or explain the issue to the user.' })
-      apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+    const prior = failureTracker.get(callKey)
+    if (prior && prior.count >= 2) {
+      apiHistory.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({
+        error: `This call has already failed ${prior.count} times this turn. Do NOT retry it again.`,
+        last_error: prior.lastError,
+        instruction: 'Analyze the error, use a different approach, or explain to the user why this cannot be done.',
+      }) })
       return
     }
     executedCalls.add(callKey)
@@ -716,101 +1082,144 @@
       if (call.function.name === 'execute_sql') {
         const sql = String(args.sql ?? '').trim()
         if (!sql) {
-          toolResult = JSON.stringify({ error: 'Empty SQL provided' })
-          apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+          apiHistory.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: 'Empty SQL provided' }) })
           return
         }
         if (isDestructiveSql(sql)) {
           const confirmed = await waitForConfirm(sql)
           if (!confirmed) {
-            toolResult = JSON.stringify({ cancelled: true, message: 'User declined this operation.' })
-            apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+            apiHistory.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ cancelled: true, message: 'User declined this operation.' }) })
             return
           }
         }
         const { sql: guardedSql, capped: frontendCapped } = guardSelectLimit(sql)
         const execId = uid()
-        items = [...items, { id: execId, kind: 'executing', sql }]
+        items.push(/** @type {ChatItem} */ ({ id: execId, kind: 'executing', sql }))
         await scrollBottom()
-        const data = await executeSql(guardedSql)
-        const cols = data.columns ?? []
-        const rows = data.rows ?? []
-        const total = data.rowCount ?? rows.length
-        // Backend signals a cap via its message field
-        const backendCapped = typeof data.message === 'string' && data.message.startsWith('Showing first')
-        const anyCapped = frontendCapped || backendCapped
-        const displayRows = rows.slice(0, AI_DISPLAY_ROWS)
-        const resultId = uid()
-        items = items
-          .filter((i) => i.id !== execId)
-          .concat([{
-            id: resultId,
-            kind: 'result',
-            sql,
-            columns: cols,
-            rows: displayRows,
-            total,
-            error: null,
-            capped: anyCapped,
-          }])
-        autoOpenResult(resultId)
-        await scrollBottom()
-        toolResult = JSON.stringify({
-          columns: cols.map((c) => c.name),
-          rows: rows.slice(0, 30),
-          total_rows: total,
-          ...(anyCapped ? { notice: data.message ?? `Results capped. Use WHERE or LIMIT to fetch a specific range.` } : {}),
-          message: data.message ?? null,
-        })
+        try {
+          const data = await executeSql(guardedSql)
+          const cols = data.columns ?? []
+          const rows = data.rows ?? []
+          const total = data.rowCount ?? rows.length
+          const backendCapped = typeof data.message === 'string' && data.message.startsWith('Showing first')
+          const resultId = uid()
+          // Replace executing indicator with result card in one operation
+          const execIdx = items.findIndex((i) => i.id === execId)
+          const resultItem = /** @type {ChatItem} */ ({ id: resultId, kind: 'result', sql, columns: cols, rows: rows.slice(0, AI_DISPLAY_ROWS), total, error: null, capped: frontendCapped })
+          if (execIdx >= 0) items.splice(execIdx, 1, resultItem)
+          else items.push(resultItem)
+          autoOpenResult(resultId)
+          await scrollBottom()
+          toolResult = JSON.stringify({
+            columns: cols.map((c) => c.name),
+            rows: rows.slice(0, 30),
+            total_rows: total,
+            ...(backendCapped ? { notice: data.message ?? 'Results capped. Use WHERE or LIMIT to narrow results.' } : {}),
+            message: data.message ?? null,
+          })
+        } catch (sqlErr) {
+          // Remove executing indicator silently — AI sees the error via toolResult
+          const execIdx = items.findIndex((i) => i.id === execId)
+          if (execIdx >= 0) items.splice(execIdx, 1)
+          const msg = String(sqlErr)
+          const hint = classifyDbError(msg)
+          const existing = failureTracker.get(callKey) ?? { count: 0, lastError: '' }
+          failureTracker.set(callKey, { count: existing.count + 1, lastError: msg })
+          toolResult = JSON.stringify({ error: msg, ...(hint ? { hint } : {}), attempt: existing.count + 1 })
+        }
+
       } else if (call.function.name === 'describe_table') {
         const schema = String(args.schema ?? schemaContext.activeSchema).replace(/'/g, "''")
         const table = String(args.table ?? '').replace(/'/g, "''")
         const execId = uid()
-        items = [...items, { id: execId, kind: 'executing', sql: `${schema}.${table} schema` }]
+        items.push(/** @type {ChatItem} */ ({ id: execId, kind: 'executing', sql: `${schema}.${table} schema` }))
         await scrollBottom()
-        const data = await executeSql(
-          `SELECT column_name::text, data_type::text, is_nullable::text, column_default::text
-           FROM information_schema.columns
-           WHERE table_schema = '${schema}' AND table_name = '${table}'
-           ORDER BY ordinal_position`,
-        )
+        const descSql = schemaContext.dbType === 'mysql'
+          ? `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${table}' ORDER BY ORDINAL_POSITION`
+          : `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = '${table}' ORDER BY ordinal_position`
+        const data = await executeSql(descSql)
         const cols = data.columns ?? []
         const rows = data.rows ?? []
         const schemaResultId = uid()
-        items = items
-          .filter((i) => i.id !== execId)
-          .concat([{
-            id: schemaResultId,
-            kind: 'result',
-            sql: `${schema}.${table} schema`,
-            columns: cols,
-            rows,
-            total: rows.length,
-            error: null,
-            isSchema: true,
-          }])
+        const schemaResultItem = /** @type {ChatItem} */ ({ id: schemaResultId, kind: 'result', sql: `${schema}.${table} schema`, columns: cols, rows, total: rows.length, error: null, isSchema: true })
+        const execIdx = items.findIndex((i) => i.id === execId)
+        if (execIdx >= 0) items.splice(execIdx, 1, schemaResultItem)
+        else items.push(schemaResultItem)
         autoOpenResult(schemaResultId)
         await scrollBottom()
         toolResult = JSON.stringify({
           table: `${schema}.${table}`,
           columns: rows.map((r) => ({ name: r[0], type: r[1], nullable: r[2] === 'YES', default: r[3] ?? null })),
         })
+
+      } else if (call.function.name === 'render_chart') {
+        const chartSpec = args
+        const chartId = uid()
+        if (!chartSpec.data?.length) {
+          items.push(/** @type {ChatItem} */ ({ id: chartId, kind: 'chart', spec: chartSpec, error: 'No data provided to render_chart. Call execute_sql first.' }))
+          toolResult = JSON.stringify({ error: 'No data provided. Execute a SQL query first and pass the results.' })
+        } else {
+          items.push(/** @type {ChatItem} */ ({ id: chartId, kind: 'chart', spec: chartSpec, error: null }))
+          await scrollBottom()
+          toolResult = JSON.stringify({ success: true, message: 'Chart rendered successfully.' })
+        }
+
+      } else if (call.function.name === 'list_tables') {
+        const tableNames = schemaContext.tables.map((t) => ({ name: t.name, rowCount: t.rowCount }))
+        toolResult = JSON.stringify({ schema: schemaContext.activeSchema, tables: tableNames, total: tableNames.length })
+
+      } else if (call.function.name === 'get_schema') {
+        const targetTable = String(args.table ?? '').trim()
+        const execId = uid()
+        items.push(/** @type {ChatItem} */ ({ id: execId, kind: 'executing', sql: targetTable ? `schema: ${targetTable}` : `schema: all tables` }))
+        await scrollBottom()
+        try {
+          const isMysql = schemaContext.dbType === 'mysql'
+          const sc = schemaContext.activeSchema.replace(/'/g, "''")
+          if (targetTable) {
+            const tt = targetTable.replace(/'/g, "''")
+            const sql = isMysql
+              ? `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${sc}' AND TABLE_NAME = '${tt}' ORDER BY ORDINAL_POSITION`
+              : `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = '${sc}' AND table_name = '${tt}' ORDER BY ordinal_position`
+            const data = await executeSql(sql)
+            const cols = (data.rows ?? []).map((r) => ({ name: r[0], type: r[1], nullable: r[2] === 'YES', default: r[3] ?? null }))
+            const execIdx = items.findIndex((i) => i.id === execId)
+            if (execIdx >= 0) items.splice(execIdx, 1)
+            toolResult = JSON.stringify({ table: `${schemaContext.activeSchema}.${targetTable}`, columns: cols })
+          } else {
+            const sql = isMysql
+              ? `SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${sc}' ORDER BY TABLE_NAME, ORDINAL_POSITION`
+              : `SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${sc}' ORDER BY table_name, ordinal_position`
+            const data = await executeSql(sql)
+            const byTable = /** @type {Record<string, unknown[]>} */ ({})
+            for (const row of (data.rows ?? [])) {
+              const tName = String(row[0])
+              if (!byTable[tName]) byTable[tName] = []
+              byTable[tName].push({ name: row[1], type: row[2], nullable: row[3] === 'YES' })
+            }
+            const execIdx = items.findIndex((i) => i.id === execId)
+            if (execIdx >= 0) items.splice(execIdx, 1)
+            toolResult = JSON.stringify({ schema: schemaContext.activeSchema, tables: byTable })
+          }
+        } catch (e) {
+          const execIdx = items.findIndex((i) => i.id === execId)
+          if (execIdx >= 0) items.splice(execIdx, 1)
+          toolResult = JSON.stringify({ error: String(e) })
+        }
+
       } else {
         toolResult = JSON.stringify({ error: `Unknown tool: ${call.function.name}` })
       }
     } catch (e) {
+      // Outer catch: JSON parse errors, unexpected exceptions — remove executing indicator silently
+      items = items.filter((i) => i.kind !== 'executing')
       const msg = String(e)
-      const errId = uid()
-      // Remove any in-flight executing card before showing the error
-      items = items
-        .filter((i) => i.kind !== 'executing')
-        .concat([{ id: errId, kind: 'result', sql: '', columns: [], rows: [], total: 0, error: msg }])
-      autoOpenResult(errId)
-      await scrollBottom()
-      toolResult = JSON.stringify({ error: msg })
-      failedCalls.add(callKey)
+      const hint = classifyDbError(msg)
+      const existing = failureTracker.get(callKey) ?? { count: 0, lastError: '' }
+      failureTracker.set(callKey, { count: existing.count + 1, lastError: msg })
+      toolResult = JSON.stringify({ error: msg, ...(hint ? { hint } : {}), attempt: existing.count + 1 })
     }
-    apiHistory = [...apiHistory, { role: 'tool', tool_call_id: call.id, content: toolResult }]
+    apiHistory.push({ role: 'tool', tool_call_id: call.id, content: toolResult })
   }
 
   /** Run SQL from a text-mode code block (user pressed Run). */
@@ -823,24 +1232,26 @@
     }
     loading = true
     const execId = uid()
-    items = [...items, { id: execId, kind: 'executing', sql }]
+    items.push(/** @type {ChatItem} */ ({ id: execId, kind: 'executing', sql }))
     await scrollBottom()
     try {
       const data = await executeSql(sql)
       const cols = data.columns ?? []
       const rows = data.rows ?? []
       const sqlResId = uid()
-      items = items
-        .filter((i) => i.id !== execId)
-        .concat([{ id: sqlResId, kind: 'result', sql, columns: cols, rows, total: data.rowCount ?? rows.length, error: null }])
+      const resultItem = /** @type {ChatItem} */ ({ id: sqlResId, kind: 'result', sql, columns: cols, rows, total: data.rowCount ?? rows.length, error: null })
+      const execIdx = items.findIndex((i) => i.id === execId)
+      if (execIdx >= 0) items.splice(execIdx, 1, resultItem)
+      else items.push(resultItem)
       autoOpenResult(sqlResId)
       await scrollBottom()
       await persistCurrent()
     } catch (e) {
       const sqlErrId = uid()
-      items = items
-        .filter((i) => i.id !== execId)
-        .concat([{ id: sqlErrId, kind: 'result', sql, columns: [], rows: [], total: 0, error: String(e) }])
+      const errItem = /** @type {ChatItem} */ ({ id: sqlErrId, kind: 'result', sql, columns: [], rows: [], total: 0, error: String(e) })
+      const execIdx = items.findIndex((i) => i.id === execId)
+      if (execIdx >= 0) items.splice(execIdx, 1, errItem)
+      else items.push(errItem)
       autoOpenResult(sqlErrId)
       await scrollBottom()
     } finally {
@@ -852,18 +1263,16 @@
   function waitForConfirm(sql) {
     return new Promise((resolve) => {
       const itemId = uid()
-      items = [
-        ...items,
-        {
-          id: itemId,
-          kind: 'confirm',
-          sql,
-          resolve: (ok) => {
-            items = items.filter((i) => i.id !== itemId)
-            resolve(ok)
-          },
+      items.push(/** @type {ChatItem} */ ({
+        id: itemId,
+        kind: 'confirm',
+        sql,
+        resolve: (ok) => {
+          const idx = items.findIndex((i) => i.id === itemId)
+          if (idx >= 0) items.splice(idx, 1)
+          resolve(ok)
         },
-      ]
+      }))
       void scrollBottom()
     })
   }
@@ -884,6 +1293,12 @@
   /** @param {KeyboardEvent} e */
   function handleGlobalKey(e) {
     if (!isActive) return
+    // Escape closes fullscreen diagram
+    if (e.key === 'Escape' && fullscreenDiagramCode) {
+      e.preventDefault()
+      closeDiagramFullscreen()
+      return
+    }
     const mod = e.ctrlKey || e.metaKey
     if (!mod || !e.shiftKey) return
     const key = e.key.toLowerCase()
@@ -913,15 +1328,20 @@
   onMount(() => {
     void tick().then(() => inputRef?.focus())
     document.addEventListener('keydown', handleGlobalKey)
+    // Pre-warm schema cache so the first message doesn't pay the fetch cost
+    if (schemaContext.tables?.length) void ensureFullSchemaCache()
   })
 
   onDestroy(() => {
     document.removeEventListener('keydown', handleGlobalKey)
+    // Cancel any pending rAF handles to avoid callbacks on destroyed DOM
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null }
+    if (_streamRafId !== null) { cancelAnimationFrame(_streamRafId); _streamRafId = null }
+    if (historyTimer) { clearTimeout(historyTimer); historyTimer = null }
   })
 </script>
 
 <div class="flex h-full min-h-0 overflow-hidden bg-background">
-  <div class="flex min-h-0 flex-1 overflow-hidden">
 
       <!-- ── Conversation sidebar ───────────────────────────────────────── -->
       {#if sidebarVisible}
@@ -1031,32 +1451,45 @@
       <div class="flex min-h-0 min-w-0 flex-1 flex-col">
 
         <!-- Header -->
-        <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2.5">
+        <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          {#if mode === 'full' && onexit}
+            <button
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onclick={onexit}
+              title="Back to Studio (⌘⇧A)"
+            >
+              <ArrowLeft class="size-3.5" />
+              Studio
+            </button>
+            <div class="mx-0.5 h-4 w-px bg-border"></div>
+          {/if}
           <button
             type="button"
             class={cn(
               'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground',
-              !sidebarVisible && 'text-foreground',
+              !sidebarVisible && 'bg-accent/50 text-foreground',
             )}
             title={sidebarVisible ? `Hide chats (${modKey}⇧B)` : `Show chats (${modKey}⇧B)`}
             onclick={toggleAiSidebar}
           >
-            <PanelLeft class="size-4" />
+            <PanelLeft class="size-3.5" />
           </button>
           {#if !sidebarVisible}
             <button
               type="button"
-              class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/80 bg-background px-2 text-ui-xs text-muted-foreground transition-colors hover:text-foreground"
+              class="inline-flex h-6 items-center gap-1.5 rounded-md border border-border/80 bg-background px-2 text-ui-xs text-muted-foreground transition-colors hover:text-foreground"
               title="New chat ({newChatShortcut})"
               onclick={() => void newConversation()}
             >
-              <Plus class="size-3.5" />
+              <Plus class="size-3" />
               New chat
             </button>
           {/if}
-          <Bot class="size-4 shrink-0 text-primary" />
-          <span class="text-sm font-semibold">AI Assistant</span>
-          <span class="truncate font-mono text-xs text-muted-foreground">{settings.model}</span>
+          <div class="flex items-center gap-1.5">
+            <Bot class="size-3.5 shrink-0 text-primary" />
+            <span class="text-ui-xs font-semibold">{mode === 'full' ? 'AI Mode' : 'AI Assistant'}</span>
+          </div>
           <div class="ml-auto flex items-center gap-0.5">
             <button
               type="button"
@@ -1064,103 +1497,88 @@
                 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
                 settingsOpen && 'bg-accent text-foreground',
               )}
-              title="Model settings"
-              onclick={() => (settingsOpen = !settingsOpen)}
+              title="Model & settings"
+              onclick={() => { settingsOpen = !settingsOpen; settingsTab = 'model' }}
             >
               <Settings2 class="size-3.5" />
             </button>
           </div>
         </div>
 
-        <!-- Settings panel -->
-        {#if settingsOpen}
-          <div class="shrink-0 border-b border-border bg-muted/20 px-3 py-2.5">
-            <div class="flex flex-col gap-2">
-              <div class="flex gap-2">
-                <div class="flex min-w-0 flex-1 flex-col gap-1">
-                  <Label class="text-xs">API base URL</Label>
-                  <Input class="h-7 font-mono text-xs" placeholder="https://api.mistral.ai/v1" bind:value={settings.baseUrl} />
-                </div>
-                <div class="flex w-40 shrink-0 flex-col gap-1">
-                  <Label class="text-xs">Model</Label>
-                  <Input class="h-7 font-mono text-xs" placeholder="mistral-small-latest" bind:value={settings.model} />
-                </div>
-              </div>
-              <div class="flex flex-col gap-1">
-                <Label class="text-xs">API key</Label>
-                <Input class="h-7 font-mono text-xs" type="password" placeholder="sk-… (leave empty for Ollama)" bind:value={settings.apiKey} />
-              </div>
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-xs text-muted-foreground">Presets:</span>
-                {#each [
-                  { label: 'Mistral', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest' },
-                  { label: 'OpenAI', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-                  { label: 'Ollama', url: 'http://localhost:11434/v1', model: 'llama3' },
-                  { label: 'Gemma', url: 'http://localhost:11434/v1', model: 'gemma3' },
-                ] as p (p.label)}
-                  <button
-                    type="button"
-                    class="inline-flex h-5 items-center rounded border border-border px-1.5 font-mono text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                    onclick={() => { settings.baseUrl = p.url; settings.model = p.model }}
-                  >{p.label}</button>
-                {/each}
-              </div>
-              <div class="flex items-center justify-between gap-2">
-                <p class="text-xs text-muted-foreground">Any OpenAI-compatible endpoint.</p>
-                <Button size="sm" class="h-7 px-3 text-xs" onclick={saveSettings}>Save</Button>
-              </div>
-            </div>
-          </div>
-        {/if}
-
         <!-- Messages -->
-        <div bind:this={scrollEl} class="app-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div bind:this={scrollEl} onscroll={onScrollAreaScroll} class="app-scroll min-h-0 flex-1 overflow-y-auto relative">
+          <div class={mode === 'full' ? 'mx-auto w-full max-w-6xl px-4 py-6 min-h-full flex flex-col' : 'px-3 py-3'}>
           {#if items.length === 0}
             <!-- Empty state with suggestions -->
-            <div class="flex h-full flex-col items-center justify-center gap-4 py-6">
-              <div class="flex flex-col items-center gap-2 text-center">
-                <Bot class="size-8 text-muted-foreground/25" />
-                <p class="text-sm font-medium text-muted-foreground">Ask anything about your database</p>
-                <p class="text-xs text-muted-foreground/60">
-                  {schemaContext.activeSchema}/{schemaContext.activeTable ?? '—'}
-                </p>
+            <div class="flex h-full flex-col items-center justify-center {mode === 'full' ? 'gap-8 py-16' : 'gap-4 py-6'}">
+              <div class="flex flex-col items-center {mode === 'full' ? 'gap-5' : 'gap-2'} text-center">
+                {#if mode === 'full'}
+                  <div class="relative flex size-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/20 shadow-sm">
+                    <Bot class="size-8 text-primary" />
+                  </div>
+                {:else}
+                  <Bot class="size-7 text-muted-foreground/25" />
+                {/if}
+                <div>
+                  <p class="{mode === 'full' ? 'text-xl font-semibold' : 'text-ui-sm font-medium text-muted-foreground'}">{mode === 'full' ? 'How can I help?' : 'Ask anything about your database'}</p>
+                  {#if mode === 'full'}
+                    <p class="mt-1.5 max-w-sm text-ui-sm text-muted-foreground">Query data, explore schema, generate reports, and visualize insights.</p>
+                  {/if}
+                  <p class="{mode === 'full' ? 'mt-2 font-mono text-ui-xs text-muted-foreground/50' : 'text-ui-xs text-muted-foreground/60'}">
+                    {schemaContext.activeSchema}/{schemaContext.activeTable ?? '—'}
+                  </p>
+                </div>
               </div>
 
               {#if suggestions.length > 0}
-                <div class="w-full">
-                  <div class="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Zap class="size-3" />
-                    <span>Suggestions</span>
-                  </div>
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each suggestions as s (s.label)}
-                      <button
-                        type="button"
-                        class="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-muted/30 px-3 text-xs text-foreground transition-colors hover:bg-accent hover:border-ring/40 disabled:opacity-40"
-                        disabled={loading}
-                        onclick={() => void send([s.prompt])}
-                      >
-                        <MessageSquare class="size-3 shrink-0 text-muted-foreground" />
-                        {s.label}
-                      </button>
+                <div class="{mode === 'full' ? 'w-full max-w-lg' : 'w-full'}">
+                  {#if mode !== 'full'}
+                    <div class="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Zap class="size-3" />
+                      <span>Suggestions</span>
+                    </div>
+                  {/if}
+                  <div class="{mode === 'full' ? 'grid grid-cols-2 gap-2' : 'flex flex-wrap gap-1.5'}">
+                    {#each (mode === 'full' ? suggestions.slice(0, 4) : suggestions) as s (s.label)}
+                      {#if mode === 'full'}
+                        <button
+                          type="button"
+                          class="flex items-start gap-3 rounded-xl border border-border/70 bg-card p-3.5 text-left text-ui-sm text-foreground shadow-sm transition-all hover:border-border hover:shadow-md disabled:opacity-40"
+                          disabled={loading}
+                          onclick={() => void send([s.prompt])}
+                        >
+                          <MessageSquare class="mt-0.5 size-3.5 shrink-0 text-muted-foreground/60" />
+                          <span class="leading-snug">{s.label}</span>
+                        </button>
+                      {:else}
+                        <button
+                          type="button"
+                          class="inline-flex h-7 items-center gap-1 rounded-full border border-border bg-muted/30 px-3 text-xs text-foreground transition-colors hover:bg-accent hover:border-ring/40 disabled:opacity-40"
+                          disabled={loading}
+                          onclick={() => void send([s.prompt])}
+                        >
+                          <MessageSquare class="size-3 shrink-0 text-muted-foreground" />
+                          {s.label}
+                        </button>
+                      {/if}
                     {/each}
                   </div>
                 </div>
               {/if}
             </div>
           {:else}
-            <div class="flex flex-col gap-3" data-studio-selectable="text">
+            <div class="flex flex-col gap-4" data-studio-selectable="text">
               {#each items as item (item.id)}
 
                 {#if item.kind === 'user'}
                   <div class="flex justify-end">
-                    <div class="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary px-3.5 py-2 text-sm leading-relaxed text-primary-foreground">
+                    <div class="max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-ui leading-relaxed text-primary-foreground">
                       {item.text}
                     </div>
                   </div>
 
                 {:else if item.kind === 'thinking'}
-                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <div class="flex items-center gap-2 text-ui-xs text-muted-foreground">
                     <Bot class="size-3.5 shrink-0 text-primary/60" />
                     {#if aiStatusHint}
                       <span>{aiStatusHint}</span>
@@ -1174,7 +1592,7 @@
                   </div>
 
                 {:else if item.kind === 'streaming'}
-                  <AiMarkdown content={streamingContent} debounceMs={180} streaming />
+                  <AiMarkdown content={displayStreamingContent} debounceMs={180} streaming />
 
                 {:else if item.kind === 'assistant'}
                   <div class="flex flex-col gap-2">
@@ -1185,14 +1603,19 @@
                         <div class="mermaid-output overflow-hidden rounded-lg border border-border">
                           <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/30 px-3 py-1.5">
                             <span class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Diagram</span>
-                            <div class="flex items-center gap-2">
-                              <span class="hidden text-[10px] text-muted-foreground/40 sm:block">drag · Ctrl+scroll zoom · dbl-click reset</span>
-                              <button
-                                type="button"
-                                class="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-                                onclick={() => copyText(part.content)}
-                              >
+                            <div class="flex items-center gap-1">
+                              <span class="hidden text-[10px] text-muted-foreground/40 sm:block mr-1">drag · Ctrl+scroll zoom</span>
+                              <button type="button" class="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)} title="Copy source">
                                 <Copy class="size-2.5" />Source
+                              </button>
+                              <button type="button" class="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => exportDiagramSvg(part.content)} title="Export SVG">
+                                <Download class="size-2.5" />SVG
+                              </button>
+                              <button type="button" class="inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => void exportDiagramPng(part.content)} title="Export PNG">
+                                <Download class="size-2.5" />PNG
+                              </button>
+                              <button type="button" class="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => openDiagramFullscreen(part.content)} title="Fullscreen">
+                                <Maximize2 class="size-3" />
                               </button>
                             </div>
                           </div>
@@ -1207,25 +1630,35 @@
                           <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/40 px-3 py-1.5">
                             <button
                               type="button"
-                              class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              class="flex items-center gap-1.5 text-ui-xs text-muted-foreground hover:text-foreground"
                               onclick={() => toggleCollapse(sqlKey)}
                             >
                               {#if sqlOpen}<ChevronDown class="size-3" />{:else}<ChevronRight class="size-3" />{/if}
                               <span class="font-mono">SQL</span>
                             </button>
                             <div class="flex items-center gap-1">
-                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)}>
+                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)}>
                                 <Copy class="size-3" />Copy
                               </button>
-                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => onwritesql(part.content)}>
+                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => onwritesql(part.content)}>
                                 <PenLine class="size-3" />Write
                               </button>
-                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded bg-primary px-2 text-xs text-primary-foreground hover:opacity-90 disabled:opacity-50" disabled={loading} onclick={() => void runSqlBlock(part.content)}>
+                              <button type="button" class="inline-flex h-6 items-center gap-1 rounded bg-primary px-2 text-ui-xs text-primary-foreground hover:opacity-90 disabled:opacity-50" disabled={loading} onclick={() => void runSqlBlock(part.content)}>
                                 <Play class="size-3" />Run
                               </button>
                             </div>
                           </div>
                           <AiSqlBlock sql={part.content} open={sqlOpen} />
+                        </div>
+                      {:else if part.type === 'error'}
+                        <div class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2.5 text-ui-xs text-destructive">
+                          <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />
+                          <span>{part.content}</span>
+                        </div>
+                      {:else if part.type === 'confirm_prompt'}
+                        <div class="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2.5 text-ui-xs text-amber-600 dark:text-amber-400">
+                          <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />
+                          <span>{part.content}</span>
                         </div>
                       {:else}
                         {@const codeKey = `${item.id}-${pi}`}
@@ -1234,13 +1667,13 @@
                           <div class="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/40 px-3 py-1.5">
                             <button
                               type="button"
-                              class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              class="flex items-center gap-1.5 text-ui-xs text-muted-foreground hover:text-foreground"
                               onclick={() => toggleCollapse(codeKey)}
                             >
                               {#if codeOpen}<ChevronDown class="size-3" />{:else}<ChevronRight class="size-3" />{/if}
                               <span class="font-mono">{part.lang || 'code'}</span>
                             </button>
-                            <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)}>
+                            <button type="button" class="inline-flex h-6 items-center gap-1 rounded px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground" onclick={() => copyText(part.content)}>
                               <Copy class="size-3" />Copy
                             </button>
                           </div>
@@ -1255,7 +1688,7 @@
                   </div>
 
                 {:else if item.kind === 'executing'}
-                  <div class="flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+                  <div class="flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-1.5 text-ui-xs text-muted-foreground">
                     <span class="inline-flex gap-0.5">
                       <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:0ms]"></span>
                       <span class="size-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:150ms]"></span>
@@ -1267,53 +1700,50 @@
                 {:else if item.kind === 'result'}
                   {@const resOpen = openResultId === item.id}
                   <div class={cn(
-                    'overflow-hidden rounded-lg border text-xs',
-                    item.error ? 'border-destructive/40 bg-destructive/5' : 'border-border',
-                    item.isSchema && 'border-primary/20',
+                    'overflow-hidden rounded-xl border text-ui-xs',
+                    item.error ? 'border-destructive/40 bg-destructive/5' : 'border-border/70',
+                    item.isSchema && 'border-primary/25',
                   )}>
                     <button
                       type="button"
                       class={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-left',
-                        item.error ? 'bg-destructive/10'
-                          : item.isSchema ? 'bg-primary/8'
-                          : 'bg-muted/30',
-                        !item.error && resOpen && 'border-b border-border/50',
-                        item.error && resOpen && 'border-b border-destructive/30',
-                        item.isSchema && resOpen && 'border-b border-primary/20',
+                        'flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/20',
+                        item.error ? 'bg-destructive/8'
+                          : item.isSchema ? 'bg-primary/6'
+                          : 'bg-muted/20',
+                        resOpen && 'border-b border-border/40',
                       )}
                       onclick={() => toggleResult(item.id)}
                     >
-                      {#if resOpen}<ChevronDown class="size-3 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="size-3 shrink-0 text-muted-foreground" />{/if}
-                      <Table2 class={cn('size-3 shrink-0', item.isSchema ? 'text-primary/70' : 'text-muted-foreground')} />
-                      <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground">{item.sql || 'Query'}</span>
+                      {#if resOpen}<ChevronDown class="size-3 shrink-0 text-muted-foreground/60" />{:else}<ChevronRight class="size-3 shrink-0 text-muted-foreground/60" />{/if}
+                      <Table2 class={cn('size-3 shrink-0', item.isSchema ? 'text-primary/60' : 'text-muted-foreground/60')} />
+                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground/70">{item.sql || 'Query'}</span>
                       {#if !item.error}
-                        <span
-                          class="shrink-0 tabular-nums text-muted-foreground"
-                          title={item.total.toLocaleString('en-US')}
-                        >{formatCompactCount(item.total)} {item.total === 1 ? 'row' : 'rows'}</span>
+                        <span class="shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-muted-foreground">
+                          {formatCompactCount(item.total)} {item.total === 1 ? 'row' : 'rows'}
+                        </span>
                       {/if}
                     </button>
                     {#if resOpen}
                       {#if item.error}
-                        <p class="px-3 py-2 font-mono text-destructive">{item.error}</p>
+                        <div class="flex items-start gap-2 px-3 py-2.5">
+                          <AlertTriangle class="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                          <p class="font-mono text-[11px] leading-relaxed text-destructive">{item.error}</p>
+                        </div>
                       {:else if item.rows.length === 0}
-                        <p class="px-3 py-2 italic text-muted-foreground">No rows returned.</p>
+                        <p class="px-3 py-3 text-center text-ui-xs italic text-muted-foreground/60">No rows returned.</p>
                       {:else}
-                        <DataTable
-                          columns={item.columns}
-                          rows={item.rows.slice(0, 10)}
-                          embedded
-                          showSelection={false}
-                        />
-                        {#if item.capped}
-                          <p class="flex items-center gap-1.5 border-t border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-amber-600 dark:text-amber-400">
-                            <AlertTriangle class="size-3 shrink-0" />
-                            Results capped at {AI_ROW_LIMIT.toLocaleString()} rows to protect performance. Add an explicit LIMIT or WHERE clause.
-                          </p>
-                        {:else if item.rows.length > 10}
-                          <p class="border-t border-border/20 px-3 py-1.5 text-muted-foreground">
-                            Showing 10 of {formatCompactCount(item.total)} rows
+                        <div class="overflow-x-auto">
+                          <DataTable
+                            columns={item.columns}
+                            rows={item.rows.slice(0, 15)}
+                            embedded
+                            showSelection={false}
+                          />
+                        </div>
+                        {#if item.total > 15}
+                          <p class="border-t border-border/20 px-3 py-1.5 text-[10px] text-muted-foreground/50">
+                            Showing 15 of {formatCompactCount(item.total)} rows{item.capped ? ` (limited to ${AI_ROW_LIMIT})` : ''}
                           </p>
                         {/if}
                       {/if}
@@ -1324,100 +1754,431 @@
                   <div class="overflow-hidden rounded-lg border border-destructive/40 bg-destructive/5">
                     <div class="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-2">
                       <AlertTriangle class="size-3.5 shrink-0 text-destructive" />
-                      <span class="text-xs font-medium text-destructive">Confirm destructive operation</span>
+                      <span class="text-ui-xs font-medium text-destructive">Confirm destructive operation</span>
                     </div>
-                    <pre class="px-3 py-2 font-mono text-xs text-foreground whitespace-pre-wrap">{item.sql}</pre>
+                    <pre class="px-3 py-2 font-mono text-ui-xs text-foreground whitespace-pre-wrap">{item.sql}</pre>
                     <div class="flex items-center justify-between gap-2 border-t border-destructive/20 px-3 py-2">
-                      <p class="text-xs text-muted-foreground">This cannot be undone.</p>
+                      <p class="text-ui-xs text-muted-foreground">This cannot be undone.</p>
                       <div class="flex gap-2">
-                        <button type="button" class="inline-flex h-7 items-center rounded-md border border-border px-3 text-xs text-muted-foreground hover:bg-accent" onclick={() => item.resolve(false)}>Cancel</button>
-                        <button type="button" class="inline-flex h-7 items-center rounded-md bg-destructive px-3 text-xs font-medium text-destructive-foreground hover:opacity-90" onclick={() => item.resolve(true)}>Execute</button>
+                        <button type="button" class="inline-flex h-7 items-center rounded-md border border-border px-3 text-ui-xs text-muted-foreground hover:bg-accent" onclick={() => item.resolve(false)}>Cancel</button>
+                        <button type="button" class="inline-flex h-7 items-center rounded-md bg-destructive px-3 text-ui-xs font-medium text-destructive-foreground hover:opacity-90" onclick={() => item.resolve(true)}>Execute</button>
                       </div>
                     </div>
+                  </div>
+
+                {:else if item.kind === 'chart'}
+                  <div class="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                    {#if item.error}
+                      <div class="flex items-center gap-2 px-4 py-3 text-ui-sm text-destructive">
+                        <AlertTriangle class="size-4 shrink-0" />
+                        {item.error}
+                      </div>
+                    {:else}
+                      <div class="border-b border-border/50 bg-muted/30 px-4 py-2 flex items-center gap-2">
+                        <span class="text-ui-xs font-semibold text-muted-foreground uppercase tracking-wide">{item.spec.title || 'Chart'}</span>
+                        <span class="ml-auto text-ui-xs text-muted-foreground/50 capitalize">{item.spec.type} chart</span>
+                      </div>
+                      <div class="p-4">
+                        <AiChartRenderer spec={item.spec} />
+                      </div>
+                    {/if}
                   </div>
                 {/if}
 
               {/each}
             </div>
           {/if}
+          </div>
+
+          <!-- Jump-to-bottom button: shown when user has scrolled up during streaming -->
+          {#if userScrolledUp && loading}
+            <div class="pointer-events-none sticky bottom-3 flex justify-center">
+              <button
+                type="button"
+                onclick={jumpToBottom}
+                class="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-ui-xs font-medium text-foreground shadow-md transition-all hover:bg-accent"
+              >
+                <ChevronDown class="size-3.5" />
+                Jump to latest
+              </button>
+            </div>
+          {/if}
         </div>
 
         <!-- Error bar -->
         {#if error}
-          <div class="shrink-0 border-t border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive">{error}</div>
+          <div class="shrink-0 border-t border-destructive/30 bg-destructive/8 px-3 py-2 text-ui-xs text-destructive">{error}</div>
         {/if}
 
         <!-- Input -->
-        <div class="shrink-0 border-t border-border bg-background px-3 pb-3 pt-2.5">
-          <div class={cn(
-            'flex flex-col rounded-xl border bg-background transition-colors',
-            hasPendingConfirm
-              ? 'border-border opacity-60'
-              : 'border-border focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20',
-          )}>
-            <textarea
-              bind:this={inputRef}
-              class="min-h-[2.75rem] flex-1 resize-none bg-transparent px-3.5 pt-2.5 pb-1.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-              style="height:auto;overflow-y:hidden"
-              placeholder={hasPendingConfirm ? 'Confirm or cancel the operation above…' : 'Ask anything about your database…'}
-              rows={1}
-              value={inputText}
-              oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput(); pushHistory(inputText) }}
-              onkeydown={handleKeydown}
-              disabled={hasPendingConfirm}
-            ></textarea>
-            <!-- toolbar row -->
-            <div class="flex items-center justify-between px-2 pb-1.5">
-              <div class="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  disabled={!canUndo || hasPendingConfirm}
-                  onclick={undoInput}
-                  title="Undo ({modKey}+Z)"
-                  class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                >
-                  <Undo2 class="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  disabled={!canRedo || hasPendingConfirm}
-                  onclick={redoInput}
-                  title="Redo ({modKey}+Shift+Z)"
-                  class="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                >
-                  <Redo2 class="size-3.5" />
-                </button>
+        <div class="shrink-0 bg-background {mode === 'full' ? 'px-6 pb-6 pt-3' : 'px-3 pb-3 pt-2'}">
+          <div class="{mode === 'full' ? 'mx-auto w-full max-w-6xl' : ''}">
+
+            <!-- Context usage micro-indicator (shown when >50% used) -->
+            {#if contextStats.pct >= 50 && !hasPendingConfirm}
+              <div class="mb-1.5 flex items-center gap-2 px-1">
+                <div class="h-px flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    class={cn('h-full rounded-full', contextStats.pct >= 90 ? 'bg-destructive/70' : contextStats.pct >= 70 ? 'bg-amber-500/70' : 'bg-primary/50')}
+                    style="width: {contextStats.pct}%"
+                  ></div>
+                </div>
+                <span class="shrink-0 font-mono text-[10px] text-muted-foreground/40">{contextStats.pct}%</span>
               </div>
-              {#if loading}
-                <button
-                  type="button"
-                  class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground transition-opacity hover:opacity-80"
-                  onclick={stop}
-                  aria-label="Stop generating"
-                  title="Stop generating"
-                >
-                  <Square class="size-3 fill-current" />
-                </button>
-              {:else}
-                <button
-                  type="button"
-                  class="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-30"
-                  disabled={hasPendingConfirm || !inputText.trim()}
-                  onclick={() => void send()}
-                  aria-label="Send"
-                >
-                  <Send class="size-3.5" />
-                </button>
-              {/if}
+            {/if}
+
+            <!-- Main input card -->
+            <div class={cn(
+              'flex flex-col rounded-2xl border bg-background transition-all duration-150',
+              mode === 'full' ? 'shadow-lg shadow-black/5' : 'shadow-sm',
+              hasPendingConfirm
+                ? 'border-border opacity-60'
+                : error
+                  ? 'border-destructive/40 focus-within:border-destructive/60 focus-within:ring-2 focus-within:ring-destructive/10'
+                  : 'border-border/80 focus-within:border-ring/60 focus-within:ring-2 focus-within:ring-ring/15',
+            )}>
+              <!-- Textarea -->
+              <textarea
+                bind:this={inputRef}
+                class="min-h-[52px] w-full flex-1 resize-none bg-transparent px-4 pt-3.5 pb-2 text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/40 disabled:cursor-not-allowed"
+                style="height:auto;overflow-y:hidden;max-height:220px;overflow-y:auto"
+                placeholder={hasPendingConfirm ? 'Confirm or cancel the operation above…' : mode === 'full' ? 'Ask anything — query, visualise, or explore…' : 'Ask about your database…'}
+                rows={1}
+                value={inputText}
+                oninput={(e) => { inputText = /** @type {HTMLTextAreaElement} */ (e.target).value; resizeInput(); pushHistory(inputText) }}
+                onkeydown={handleKeydown}
+                disabled={hasPendingConfirm}
+              ></textarea>
+
+              <!-- Bottom bar -->
+              <div class="flex items-center gap-2 px-3 pb-2.5 pt-1">
+                <!-- Left: model + context badges -->
+                <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground select-none"
+                    onclick={() => { settingsOpen = true; settingsTab = 'model' }}
+                    title="Model settings"
+                  >
+                    <Cpu class="size-2.5" />
+                    {settings.model.split('/').pop()?.slice(0, 20) ?? settings.model}
+                  </button>
+                  {#if skills.length > 0}
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-md bg-primary/6 px-1.5 py-0.5 font-mono text-[10px] text-primary/70 transition-colors hover:bg-primary/12 select-none"
+                      onclick={() => { settingsOpen = true; settingsTab = 'skills' }}
+                      title="Manage skills"
+                    >
+                      <BookOpen class="size-2.5" />
+                      {skills.length}
+                    </button>
+                  {/if}
+                  {#if contextStats.messages > 0}
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/50 transition-colors hover:bg-accent hover:text-muted-foreground select-none"
+                      onclick={() => { settingsOpen = true; settingsTab = 'context' }}
+                      title="Context usage"
+                    >
+                      <BarChart2 class="size-2.5" />
+                      {tokEst(contextStats.totalChars)}
+                    </button>
+                  {/if}
+                </div>
+
+                <!-- Right: stop or send -->
+                {#if loading}
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground/70 shadow-sm transition-colors hover:border-ring/60 hover:text-foreground active:scale-95"
+                    onclick={stop}
+                    aria-label="Stop generating"
+                    title="Stop (Esc)"
+                  >
+                    <Square class="size-2.5 fill-current" />
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class={cn(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all active:scale-95',
+                      inputText.trim() && !hasPendingConfirm
+                        ? 'bg-primary text-primary-foreground shadow-sm hover:opacity-90'
+                        : 'bg-muted/60 text-muted-foreground/30 cursor-not-allowed',
+                    )}
+                    disabled={hasPendingConfirm || !inputText.trim()}
+                    onclick={() => void send()}
+                    aria-label="Send"
+                  >
+                    <Send class="size-3" />
+                  </button>
+                {/if}
+              </div>
             </div>
+
+            <!-- Below input: shortcuts hint -->
+            <p class="mt-1.5 px-1 text-[10px] text-muted-foreground/35 {mode === 'full' ? 'text-center' : ''}">
+              {#if hasPendingConfirm}
+                Confirm or cancel the operation above
+              {:else}
+                ↵ send · ⇧↵ newline{mode !== 'full' ? ' · / focus' : ''}
+              {/if}
+            </p>
           </div>
-          <p class="mt-1.5 text-[11px] text-muted-foreground/50">
-            Enter to send · Shift+Enter new line · {modKey}+Z undo · / focus
-          </p>
         </div>
 
       </div>
-    </div>
+
+      <!-- ── Right settings panel ─────────────────────────────────────── -->
+      {#if settingsOpen}
+        <aside class="flex w-72 shrink-0 flex-col border-l border-border bg-panel">
+          <!-- Panel header with tabs -->
+          <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-2">
+            {#each [{ id: 'model', label: 'Model' }, { id: 'skills', label: 'Skills' }, { id: 'context', label: 'Context' }] as tab (tab.id)}
+              <button
+                type="button"
+                class={cn(
+                  'flex-1 rounded-md py-1 text-center text-ui-xs font-medium transition-colors',
+                  settingsTab === tab.id
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+                onclick={() => (settingsTab = /** @type {'model'|'skills'|'context'} */ (tab.id))}
+              >
+                {tab.label}{tab.id === 'skills' && skills.length ? ` (${skills.length})` : ''}
+              </button>
+            {/each}
+            <button
+              type="button"
+              class="ml-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onclick={() => (settingsOpen = false)}
+            >
+              <X class="size-3.5" />
+            </button>
+          </div>
+
+          <!-- Panel content (scrollable) -->
+          <div class="app-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+
+            <!-- ── Model tab ── -->
+            {#if settingsTab === 'model'}
+              <div class="flex flex-col gap-4 p-3">
+
+                <!-- Status badge: not configured -->
+                {#if !settings.apiKey && !settings.baseUrl.includes('localhost')}
+                  <div class="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/8 px-3 py-2.5">
+                    <AlertTriangle class="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                    <p class="text-ui-xs text-amber-600 dark:text-amber-400">No API key set. Add a key below or use a local Ollama endpoint.</p>
+                  </div>
+                {/if}
+
+                <!-- Endpoint -->
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-ui-xs font-medium text-foreground">API Endpoint</label>
+                  <Input class="h-7 font-mono text-ui-xs" placeholder="https://api.mistral.ai/v1" bind:value={settings.baseUrl} />
+                </div>
+
+                <!-- API key -->
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-ui-xs font-medium text-foreground">API Key</label>
+                  <Input class="h-7 font-mono text-ui-xs" type="password" placeholder="sk-… (empty for Ollama/local)" bind:value={settings.apiKey} />
+                </div>
+
+                <!-- Model -->
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-ui-xs font-medium text-foreground">Model</label>
+                  <Input class="h-7 font-mono text-ui-xs" placeholder="mistral-small-latest" bind:value={settings.model} />
+                </div>
+
+                <!-- Presets -->
+                <div class="flex flex-col gap-2">
+                  <p class="text-ui-xs font-medium text-muted-foreground">Quick presets</p>
+                  <div class="grid grid-cols-2 gap-1.5">
+                    {#each [
+                      { label: 'Mistral Small', url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', tag: 'fast' },
+                      { label: 'Mistral Large', url: 'https://api.mistral.ai/v1', model: 'mistral-large-latest', tag: 'smart' },
+                      { label: 'GPT-4o mini', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', tag: 'fast' },
+                      { label: 'GPT-4o', url: 'https://api.openai.com/v1', model: 'gpt-4o', tag: 'smart' },
+                      { label: 'Ollama Llama3', url: 'http://localhost:11434/v1', model: 'llama3', tag: 'local' },
+                      { label: 'Ollama Gemma3', url: 'http://localhost:11434/v1', model: 'gemma3', tag: 'local' },
+                    ] as p (p.label)}
+                      <button
+                        type="button"
+                        class={cn(
+                          'flex flex-col gap-0.5 rounded-lg border px-2.5 py-2 text-left transition-colors hover:border-ring/60 hover:bg-accent',
+                          settings.model === p.model && settings.baseUrl === p.url
+                            ? 'border-primary/40 bg-primary/5 text-foreground'
+                            : 'border-border text-muted-foreground',
+                        )}
+                        onclick={() => { settings.baseUrl = p.url; settings.model = p.model }}
+                      >
+                        <span class="text-ui-xs font-medium leading-snug text-foreground">{p.label}</span>
+                        <span class={cn(
+                          'inline-block rounded px-1 py-0 font-mono text-[9px]',
+                          p.tag === 'fast' ? 'bg-green-500/12 text-green-600 dark:text-green-400'
+                            : p.tag === 'smart' ? 'bg-blue-500/12 text-blue-600 dark:text-blue-400'
+                            : 'bg-muted text-muted-foreground',
+                        )}>{p.tag}</span>
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+
+                <Button class="w-full h-8 text-ui-xs" onclick={saveSettings}>Save settings</Button>
+              </div>
+
+            <!-- ── Skills tab ── -->
+            {:else if settingsTab === 'skills'}
+              <div class="flex flex-col gap-3 p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-ui-xs text-muted-foreground">Skills inject domain knowledge into every AI request.</p>
+                  <div class="flex items-center gap-1">
+                    <label class="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2 text-ui-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                      <Upload class="size-3" />
+                      Upload
+                      <input type="file" accept=".md,text/markdown,text/plain" multiple class="sr-only" onchange={handleSkillFileUpload} />
+                    </label>
+                    <button
+                      type="button"
+                      class="inline-flex h-7 items-center gap-1 rounded-md border border-primary/30 bg-primary/8 px-2 text-ui-xs text-primary transition-colors hover:bg-primary/15"
+                      onclick={() => (newSkillOpen = !newSkillOpen)}
+                    >
+                      <Plus class="size-3" />
+                      Create
+                    </button>
+                  </div>
+                </div>
+
+                {#if newSkillOpen}
+                  <div class="flex flex-col gap-2 rounded-lg border border-border bg-background p-3">
+                    <p class="text-ui-xs font-medium">New skill</p>
+                    <div class="flex flex-col gap-1.5">
+                      <label class="text-[10px] text-muted-foreground">Name *</label>
+                      <Input class="h-7 text-ui-xs" placeholder="e.g. postgres-best-practices" bind:value={newSkillName} />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                      <label class="text-[10px] text-muted-foreground">Description</label>
+                      <Input class="h-7 text-ui-xs" placeholder="When to apply this skill" bind:value={newSkillDesc} />
+                    </div>
+                    <div class="flex flex-col gap-1.5">
+                      <label class="text-[10px] text-muted-foreground">Content (Markdown) *</label>
+                      <textarea
+                        class="min-h-[100px] w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 font-mono text-ui-xs leading-relaxed text-foreground outline-none focus:border-ring focus:ring-1 focus:ring-ring/20 placeholder:text-muted-foreground/50"
+                        placeholder="# My Skill&#10;&#10;Write rules, patterns, and guidelines in Markdown..."
+                        bind:value={newSkillContent}
+                      ></textarea>
+                    </div>
+                    <div class="flex justify-end gap-2">
+                      <button type="button" class="inline-flex h-7 items-center rounded-md border border-border px-3 text-ui-xs text-muted-foreground hover:bg-accent" onclick={() => (newSkillOpen = false)}>Cancel</button>
+                      <Button size="sm" class="h-7 px-3 text-ui-xs" disabled={!newSkillName.trim() || !newSkillContent.trim()} onclick={createSkill}>Save</Button>
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Built-in skills pills -->
+                <div class="flex flex-col gap-1">
+                  <p class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60">Built-in (always on)</p>
+                  <div class="flex flex-wrap gap-1">
+                    {#each ['PostgreSQL', 'MySQL', 'SQLite', 'Mermaid'] as b}
+                      <span class="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                        <span class="size-1.5 rounded-full bg-primary/50"></span>{b}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+
+                {#if skills.length === 0}
+                  <div class="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border py-6 text-center">
+                    <BookOpen class="size-6 text-muted-foreground/30" />
+                    <p class="text-ui-xs text-muted-foreground/60">No custom skills yet</p>
+                  </div>
+                {:else}
+                  <div class="flex flex-col gap-1.5">
+                    <p class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60">Custom ({skills.length})</p>
+                    {#each skills as skill (skill.id)}
+                      <div class="flex items-start gap-2 rounded-lg border border-border/60 bg-background p-2.5">
+                        <BookOpen class="mt-0.5 size-3.5 shrink-0 text-primary/60" />
+                        <div class="min-w-0 flex-1">
+                          <p class="truncate text-ui-xs font-medium">{skill.name}</p>
+                          {#if skill.description}
+                            <p class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">{skill.description}</p>
+                          {/if}
+                        </div>
+                        <button
+                          type="button"
+                          class="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive"
+                          onclick={() => removeSkill(skill.id)}
+                          title="Remove skill"
+                        >
+                          <X class="size-3" />
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+
+            <!-- ── Context tab ── -->
+            {:else}
+              <div class="flex flex-col gap-4 p-3">
+
+                <!-- Token gauge -->
+                <div class="flex flex-col gap-2">
+                  <div class="flex items-center justify-between">
+                    <span class="text-ui-xs font-medium">Context window</span>
+                    <span class="font-mono text-[10px] text-muted-foreground">{tokEst(contextStats.totalChars)} / {tokEst(contextStats.maxChars)} tok</span>
+                  </div>
+                  <div class="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      class={cn('h-full rounded-full transition-all duration-500',
+                        contextStats.pct >= 90 ? 'bg-destructive' : contextStats.pct >= 70 ? 'bg-amber-500' : 'bg-primary')}
+                      style="width: {contextStats.pct}%"
+                    ></div>
+                  </div>
+                  <p class="text-[10px] text-muted-foreground/60">{contextStats.pct}% used · auto-compresses at 30k tokens (keeps last 10 turns)</p>
+                </div>
+
+                <!-- Stats grid -->
+                <div class="grid grid-cols-2 gap-2">
+                  {#each [
+                    { label: 'Turns', value: String(contextStats.messages) },
+                    { label: 'History', value: tokEst(contextStats.historyChars) + ' tok' },
+                    { label: 'System', value: tokEst(contextStats.promptChars) + ' tok' },
+                    { label: 'Total', value: tokEst(contextStats.totalChars) + ' tok' },
+                  ] as stat}
+                    <div class="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-background px-2.5 py-2">
+                      <span class="font-mono text-sm font-semibold tabular-nums text-foreground">{stat.value}</span>
+                      <span class="text-[10px] text-muted-foreground">{stat.label}</span>
+                    </div>
+                  {/each}
+                </div>
+
+                <!-- How it works -->
+                <div class="rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5">
+                  <p class="mb-2 text-ui-xs font-medium">How it works</p>
+                  <ul class="space-y-1.5 text-[11px] text-muted-foreground">
+                    <li class="flex items-start gap-1.5"><span class="mt-1 size-1.5 shrink-0 rounded-full bg-primary/60"></span>History re-sent to AI on each turn — keeps full conversation context.</li>
+                    <li class="flex items-start gap-1.5"><span class="mt-1 size-1.5 shrink-0 rounded-full bg-primary/60"></span>At 30k tokens, old messages are summarised into a memory block (keeps last 10 turns).</li>
+                    <li class="flex items-start gap-1.5"><span class="mt-1 size-1.5 shrink-0 rounded-full bg-primary/60"></span>Only schema for tables you mention is injected (selective).</li>
+                    <li class="flex items-start gap-1.5"><span class="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500/70"></span>Failed tool calls blocked after 2 retries per turn.</li>
+                  </ul>
+                </div>
+
+                <button
+                  type="button"
+                  class="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-destructive/30 text-ui-xs text-destructive transition-colors hover:bg-destructive/8 hover:border-destructive/50"
+                  onclick={() => { apiHistory = []; fetchedSchemas = {}; error = '' }}
+                >
+                  <Trash2 class="size-3.5" />
+                  Clear history & schema cache
+                </button>
+              </div>
+            {/if}
+
+          </div>
+        </aside>
+      {/if}
 
     <!-- ── Right-click context menu ─────────────────────────────────────── -->
     {#if contextMenu}
@@ -1452,39 +2213,123 @@
     {/if}
 </div>
 
+<!-- ── Diagram fullscreen modal ──────────────────────────────────────────── -->
+{#if fullscreenDiagramCode}
+  <!-- Backdrop -->
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-label="Diagram fullscreen"
+    class="fixed inset-0 z-[500] flex flex-col bg-background/95 backdrop-blur-sm"
+  >
+    <!-- Header toolbar -->
+    <div class="flex shrink-0 items-center gap-2 border-b border-border bg-background/80 px-4 py-2">
+      <span class="text-ui-xs font-medium text-muted-foreground">Diagram</span>
+      <div class="ml-auto flex items-center gap-1">
+        <!-- Zoom controls -->
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={() => dispatchDiagramEvent('diagram:zoomout')}
+          title="Zoom out"
+        >
+          <ZoomOut class="size-3" />
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={() => dispatchDiagramEvent('diagram:reset')}
+          title="Reset zoom (double-click canvas)"
+        >
+          <RotateCcw class="size-3" />Reset
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={() => dispatchDiagramEvent('diagram:zoomin')}
+          title="Zoom in"
+        >
+          <ZoomIn class="size-3" />
+        </button>
+        <div class="mx-1 h-4 w-px bg-border"></div>
+        <!-- Export -->
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={() => exportDiagramSvg(fullscreenDiagramCode ?? '')}
+          title="Export as SVG"
+        >
+          <Download class="size-3" />SVG
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={() => void exportDiagramPng(fullscreenDiagramCode ?? '')}
+          title="Export as PNG"
+        >
+          <Download class="size-3" />PNG
+        </button>
+        <div class="mx-1 h-4 w-px bg-border"></div>
+        <!-- Close -->
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-ui-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          onclick={closeDiagramFullscreen}
+          title="Close (Esc)"
+        >
+          <Minimize2 class="size-3" />Exit
+        </button>
+      </div>
+    </div>
+    <!-- Canvas fills remaining height -->
+    <div class="min-h-0 flex-1 overflow-hidden">
+      <div
+        bind:this={fullscreenCanvasEl}
+        class="mermaid-canvas h-full w-full"
+        use:mermaidInteractive
+      >
+        {@html processMermaidSvg(fullscreenDiagramCode)}
+      </div>
+    </div>
+    <p class="shrink-0 border-t border-border/40 px-4 py-1.5 text-center text-[10px] text-muted-foreground/40">
+      Drag to pan · Ctrl+scroll to zoom · Double-click to reset
+    </p>
+  </div>
+{/if}
+
 <style>
   :global(.prose-ai) {
     font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-    font-size: 0.875rem;
-    line-height: 1.7;
+    font-size: 1rem;
+    line-height: 1.75;
     color: var(--foreground);
     word-break: break-word;
     font-optical-sizing: auto;
   }
   :global(.prose-ai > *:first-child) { margin-top: 0; }
   :global(.prose-ai > *:last-child) { margin-bottom: 0; }
-  :global(.prose-ai p) { margin: 0.35rem 0; }
+  :global(.prose-ai p) { margin: 0.4rem 0; }
   :global(.prose-ai strong) { font-weight: 600; }
   :global(.prose-ai em) { font-style: italic; }
   :global(.prose-ai h1, .prose-ai h2, .prose-ai h3, .prose-ai h4) {
-    font-weight: 600;
+    font-weight: 650;
     line-height: 1.3;
-    margin: 0.75rem 0 0.25rem;
+    margin: 0.85rem 0 0.3rem;
     color: var(--foreground);
   }
-  :global(.prose-ai h1) { font-size: 1rem; }
-  :global(.prose-ai h2) { font-size: 0.9375rem; }
-  :global(.prose-ai h3) { font-size: 0.875rem; }
-  :global(.prose-ai ul) { padding-left: 1.25rem; list-style-type: disc; margin: 0.35rem 0; }
-  :global(.prose-ai ol) { padding-left: 1.25rem; list-style-type: decimal; margin: 0.35rem 0; }
-  :global(.prose-ai li) { margin: 0.15rem 0; }
+  :global(.prose-ai h1) { font-size: 1.2rem; }
+  :global(.prose-ai h2) { font-size: 1.1rem; }
+  :global(.prose-ai h3) { font-size: 1rem; }
+  :global(.prose-ai ul) { padding-left: 1.35rem; list-style-type: disc; margin: 0.4rem 0; }
+  :global(.prose-ai ol) { padding-left: 1.35rem; list-style-type: decimal; margin: 0.4rem 0; }
+  :global(.prose-ai li) { margin: 0.2rem 0; }
   :global(.prose-ai code) {
     font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 0.8em;
+    font-size: 0.85em;
     background: var(--muted);
     border: 1px solid var(--border);
     border-radius: 3px;
-    padding: 0.1em 0.3em;
+    padding: 0.1em 0.35em;
   }
   :global(.prose-ai pre:not(.shiki)) {
     background: var(--muted);
@@ -1498,7 +2343,7 @@
     background: none;
     border: none;
     padding: 0;
-    font-size: 0.8rem;
+    font-size: 0.825rem;
   }
   :global(.prose-ai pre.shiki) {
     margin: 0.5rem 0;
@@ -1509,8 +2354,8 @@
   }
   :global(.prose-ai pre.shiki code) {
     font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 0.8rem;
-    line-height: 1.55;
+    font-size: 0.825rem;
+    line-height: 1.6;
   }
   :global(.prose-ai-loading pre.shiki) {
     opacity: 0.7;
@@ -1518,7 +2363,7 @@
   :global(.prose-ai table) {
     border-collapse: collapse;
     width: 100%;
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     margin: 0.5rem 0;
   }
   :global(.prose-ai th) {
@@ -1533,7 +2378,7 @@
     border: 1px solid var(--border);
     padding: 0.3rem 0.75rem;
     font-family: ui-monospace, 'Geist Mono', monospace;
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
   }
   :global(.prose-ai tr:nth-child(even) td) { background: color-mix(in oklch, var(--muted) 40%, transparent); }
   :global(.prose-ai blockquote) {

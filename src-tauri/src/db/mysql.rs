@@ -188,19 +188,57 @@ pub async fn get_table_rows(
     }
     data_q = data_q.bind(limit).bind(offset);
 
-    let (total_res, rows_res) = tokio::join!(count_q.fetch_one(pool), data_q.fetch_all(pool));
+    let meta_q = sqlx::query(
+        "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+    )
+    .bind(schema)
+    .bind(table);
+
+    let (total_res, rows_res, meta_res) = tokio::join!(
+        count_q.fetch_one(pool),
+        data_q.fetch_all(pool),
+        meta_q.fetch_all(pool),
+    );
     let total: i64 = total_res.map_err(|e| format!("Failed to count rows: {e}"))?;
     let rows = rows_res.map_err(|e| format!("Failed to fetch rows: {e}"))?;
+    let meta_rows = meta_res.unwrap_or_default();
 
-    let columns: Vec<ColumnInfo> = rows
-        .first()
-        .map(|r| {
-            r.columns()
-                .iter()
-                .map(|c| ColumnInfo::new(c.name(), c.type_info().name().to_lowercase()))
-                .collect()
+    // Build nullable map from information_schema
+    let nullable_map: HashMap<String, bool> = meta_rows
+        .iter()
+        .filter_map(|r| {
+            let name = r.try_get::<String, _>(0).ok()?;
+            let nullable = r.try_get::<String, _>(2).ok()?;
+            Some((name, nullable.eq_ignore_ascii_case("YES")))
         })
-        .unwrap_or_default();
+        .collect();
+
+    let mut columns: Vec<ColumnInfo> = if let Some(first) = rows.first() {
+        first
+            .columns()
+            .iter()
+            .map(|c| ColumnInfo::new(c.name(), c.type_info().name().to_lowercase()))
+            .collect()
+    } else {
+        // Empty table: derive column definitions from information_schema
+        meta_rows
+            .iter()
+            .filter_map(|r| {
+                Some(ColumnInfo::new(
+                    r.try_get::<String, _>(0).ok()?,
+                    r.try_get::<String, _>(1).ok()?.to_lowercase(),
+                ))
+            })
+            .collect()
+    };
+
+    // Apply nullable info
+    for col in &mut columns {
+        if let Some(&is_nullable) = nullable_map.get(&col.name) {
+            col.nullable = is_nullable;
+        }
+    }
 
     let data: Vec<Vec<Value>> = rows
         .iter()
