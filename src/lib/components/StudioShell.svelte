@@ -499,7 +499,7 @@
     commandOpen = true
   })
 
-  createHotkey('Mod+Shift+A', (e) => {
+  createHotkey('Mod+Alt+E', (e) => {
     if (!connection) return
     e.preventDefault()
     if (aiMode) exitAiMode()
@@ -817,17 +817,7 @@
   }
 
   function openAiTab() {
-    const existing = findAiTab(tabs)
-    if (existing) {
-      void activateTab(existing.id)
-      return
-    }
-    saveActiveTabState()
-    dropWelcomeTabs()
-    const tab = createAiTab()
-    tabs = [...tabs, tab]
-    activeTabId = tab.id
-    clearTableEditor()
+    enterAiMode()
   }
 
   function openSchemaTab() {
@@ -1393,10 +1383,6 @@
 
   function enterAiMode() {
     if (!connection) return
-    if (!tabs.some((t) => t.kind === 'ai')) {
-      const tab = createAiTab()
-      tabs = [...tabs, tab]
-    }
     aiMode = true
     saveAiMode(true)
   }
@@ -1750,7 +1736,8 @@
       onopencommand={() => (commandOpen = true)}
       onopenSchema={openSchemaTab}
       onopenorm={openOrmTab}
-      onopenaimode={enterAiMode}
+      {aiMode}
+      onopenaimode={() => (aiMode ? exitAiMode() : enterAiMode())}
     />
   {/if}
 
@@ -1772,9 +1759,21 @@
         </p>
       </div>
     {:else}
-      {#if !aiMode}
+      <!-- Full-window AI chat — hides tabs and studio when active -->
+      {#if aiMode}
+        <div class="flex min-h-0 flex-1 flex-col">
+          <AiChat
+            {connectionId}
+            isActive={aiMode}
+            mode="full"
+            onexit={exitAiMode}
+            onwritesql={(sql) => void handleAiWriteSql(sql)}
+          />
+        </div>
+      {:else}
+
       <TabBar
-        {tabs}
+        tabs={tabs.filter((t) => t.kind !== 'ai')}
         {activeTabId}
         onselect={(id) => activateTab(id)}
         onclose={closeTab}
@@ -1782,28 +1781,9 @@
         oncloseall={closeAllTabs}
         onnew={openWelcomeTab}
       />
-      {/if}
 
-      <!-- AI tab: always mounted once it exists so conversation state survives tab switches -->
-      {#if aiMode || tabs.some((t) => t.kind === 'ai')}
-        <div
-          class={aiMode || activeTab?.kind === 'ai' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
-          inert={!aiMode && activeTab?.kind !== 'ai'}
-        >
-          <AiChat
-            schemaContext={aiSchemaContext}
-            {connectionId}
-            isActive={aiMode || activeTab?.kind === 'ai'}
-            mode={aiMode ? 'full' : 'tab'}
-            onexit={aiMode ? exitAiMode : null}
-            onwritesql={(sql) => void handleAiWriteSql(sql)}
-          />
-        </div>
-      {/if}
-
-      {#if !aiMode}
       {#if activeTab?.kind === 'ai'}
-        <!-- handled by the always-mounted block above -->
+        <!-- AI is handled via AI mode toggle -->
       {:else if activeTab?.kind === 'schema'}
         <SchemaPage
           {indexes}
@@ -1985,7 +1965,7 @@
                 <div class="flex size-8 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
                   <Bot size={14} />
                 </div>
-                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}⇧A</kbd>
+                <kbd class="rounded border border-border/40 px-1.5 py-0.5 font-mono text-ui-3xs text-muted-foreground/50">{mod}⌥E</kbd>
               </div>
               <div>
                 <p class="text-ui-sm font-medium text-foreground">AI Assistant</p>

@@ -111,6 +111,7 @@
     onopenSchema = () => {},
     onopenorm = () => {},
     onopenaimode = () => {},
+    aiMode = false,
   } = $props();
 
   let localFilter = $state(untrack(() => tableFilter));
@@ -660,8 +661,13 @@
       </button>
       <button
         type="button"
-        class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="AI Mode (⌘⇧A)"
+        class={cn(
+          'inline-flex size-7 items-center justify-center rounded-md transition-colors',
+          aiMode
+            ? 'bg-primary/10 text-primary hover:bg-primary/15'
+            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+        title={aiMode ? 'Close AI panel (⌘⌥E)' : 'Open AI panel (⌘⌥E)'}
         onclick={onopenaimode}
       >
         <Bot class="size-3.5" />

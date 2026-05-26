@@ -154,15 +154,15 @@
           <Command.Item value="ask ai assistant chat query" onSelect={() => run(onopenai)}>
             <Bot class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Ask AI</span>
-            <Command.Shortcut keys="⌘⇧A" />
+            <Command.Shortcut keys="⌘⌥E" />
           </Command.Item>
           <Command.Item
-            value={aiMode ? "exit ai mode switch to development dev mode studio" : "enter ai mode fullscreen chat only switch"}
+            value={aiMode ? "close ai panel hide assistant" : "open ai panel show assistant chat"}
             onSelect={() => run(ontoggleaimode)}
           >
             <ArrowLeftRight class="size-4 shrink-0 opacity-60" />
-            <span data-slot="command-label" class="truncate">{aiMode ? 'Switch to Dev Mode' : 'Switch to AI Mode'}</span>
-            <Command.Shortcut keys="⌘⇧A" />
+            <span data-slot="command-label" class="truncate">{aiMode ? 'Close AI panel' : 'Open AI panel'}</span>
+            <Command.Shortcut keys="⌘⌥E" />
           </Command.Item>
         </Command.Group>
 

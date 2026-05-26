@@ -16,11 +16,10 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import PanelLeft from '@lucide/svelte/icons/panel-left'
-  import ArrowLeft from '@lucide/svelte/icons/arrow-left'
+  import X from '@lucide/svelte/icons/x'
   import Database from '@lucide/svelte/icons/database'
   import Upload from '@lucide/svelte/icons/upload'
   import BookOpen from '@lucide/svelte/icons/book-open'
-  import X from '@lucide/svelte/icons/x'
   import BarChart2 from '@lucide/svelte/icons/bar-chart-2'
   import Cpu from '@lucide/svelte/icons/cpu'
   import Maximize2 from '@lucide/svelte/icons/maximize-2'
@@ -1452,18 +1451,6 @@
 
         <!-- Header -->
         <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-          {#if mode === 'full' && onexit}
-            <button
-              type="button"
-              class="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              onclick={onexit}
-              title="Back to Studio (⌘⇧A)"
-            >
-              <ArrowLeft class="size-3.5" />
-              Studio
-            </button>
-            <div class="mx-0.5 h-4 w-px bg-border"></div>
-          {/if}
           <button
             type="button"
             class={cn(
@@ -1488,7 +1475,7 @@
           {/if}
           <div class="flex items-center gap-1.5">
             <Bot class="size-3.5 shrink-0 text-primary" />
-            <span class="text-ui-xs font-semibold">{mode === 'full' ? 'AI Mode' : 'AI Assistant'}</span>
+            <span class="text-ui-xs font-semibold">AI</span>
           </div>
           <div class="ml-auto flex items-center gap-0.5">
             <button
@@ -1502,6 +1489,16 @@
             >
               <Settings2 class="size-3.5" />
             </button>
+            {#if onexit}
+              <button
+                type="button"
+                class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Close AI panel (⌘⌥E)"
+                onclick={onexit}
+              >
+                <X class="size-3.5" />
+              </button>
+            {/if}
           </div>
         </div>
 
