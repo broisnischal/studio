@@ -23,5 +23,5 @@
   })
 </script>
 
-<Toaster position="top-right" offset="12px" expand closeButton />
+<Toaster position="top-right" offset="12px" closeButton />
 <StudioShell />

@@ -1,6 +1,8 @@
 mod commands;
 mod db;
+mod docker;
 mod mcp;
+mod secrets;
 
 use db::{ActiveConnection, DbState};
 use mcp::McpState;
@@ -85,6 +87,8 @@ pub fn run() {
             commands::pg_list_tables,
             commands::pg_list_indexes,
             commands::pg_list_enums,
+            commands::pg_truncate_table,
+            commands::pg_drop_table,
             commands::pg_get_table_rows,
             commands::pg_execute_sql,
             commands::pg_update_table_cell,
@@ -94,6 +98,11 @@ pub fn run() {
             mcp::mcp_start,
             mcp::mcp_stop,
             mcp::mcp_status,
+            docker::docker_check,
+            docker::docker_run_db,
+            secrets::ai_store_key,
+            secrets::ai_load_key,
+            secrets::ai_delete_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

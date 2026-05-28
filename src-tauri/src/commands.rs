@@ -90,7 +90,7 @@ pub fn toggle_devtools(window: tauri::WebviewWindow) {
 use crate::db::{
     connect, connect_d1, connect_mysql, connect_sqlite, disconnect,
     delete_table_row, delete_table_rows, execute_sql, get_table_rows, insert_table_row,
-    list_schemas, list_tables, list_indexes, list_enums,
+    list_schemas, list_tables, list_indexes, list_enums, truncate_table, drop_table,
     test_connection, test_d1_connection, test_mysql_connection, test_sqlite_connection,
     update_table_cell, ConnectionConfig, D1Config, DbState, EnumInfo, IndexInfo, InsertRowResult,
     MysqlConfig, SqlResult, SqliteConfig, TableInfo, TableRows,
@@ -195,6 +195,25 @@ pub async fn pg_list_enums(
     schema: String,
 ) -> Result<Vec<EnumInfo>, String> {
     list_enums(state, schema).await
+}
+
+#[tauri::command]
+pub async fn pg_truncate_table(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+) -> Result<(), String> {
+    truncate_table(state, schema, table).await
+}
+
+#[tauri::command]
+pub async fn pg_drop_table(
+    state: State<'_, DbState>,
+    schema: String,
+    table: String,
+    cascade: bool,
+) -> Result<(), String> {
+    drop_table(state, schema, table, cascade).await
 }
 
 #[tauri::command]

@@ -98,6 +98,10 @@
     indexes = [],
     /** Column names pinned to the left. Bindable so the parent can persist. */
     pinnedColumns = $bindable(/** @type {Set<string>} */ (new Set())),
+    /** Active sort. null = unsorted. */
+    rowSort = /** @type {{ column: string, direction: 'asc' | 'desc' } | null} */ (null),
+    /** Called when user clicks a column header to sort. */
+    onsortchange = /** @type {(sort: { column: string, direction: 'asc' | 'desc' } | null) => void} */ (() => {}),
   } = $props();
 
   /** @type {HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null} */
@@ -867,6 +871,17 @@
     collapsedColumns = next
   }
 
+  /** Cycle sort: none → asc → desc → none */
+  function handleHeaderSort(colName) {
+    if (rowSort?.column !== colName) {
+      onsortchange({ column: colName, direction: 'desc' })
+    } else if (rowSort.direction === 'desc') {
+      onsortchange({ column: colName, direction: 'asc' })
+    } else {
+      onsortchange(null)
+    }
+  }
+
   /** Toggle pinning a column to the left. */
   function toggleColumnPin(colName) {
     const next = new Set(pinnedColumns)
@@ -1204,15 +1219,24 @@
                       </div>
                     </th>
                   {:else}
+                    {@const isSorted = rowSort?.column === col.name}
                     <th
                       class={cn(
-                        "group/th relative overflow-hidden px-3 py-1 text-left font-normal",
+                        "group/th relative overflow-hidden px-0 py-1 text-left font-normal",
                         resizingColName === col.name && "bg-accent/30",
                         isPinned && "sticky z-[1] bg-panel shadow-[1px_0_0_hsl(var(--border)/0.6)]",
                       )}
                       style="width: {colW}px; min-width: {colW}px; max-width: {colW}px{isPinned ? `; left: ${pinLeft}px` : ''}"
                     >
-                      <div class="flex min-w-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        class={cn(
+                          "flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-3 py-0.5 text-left transition-colors hover:bg-accent/40",
+                          isSorted && "bg-accent/20",
+                        )}
+                        onclick={() => handleHeaderSort(col.name)}
+                        title="Sort by {col.name}"
+                      >
                         <div class="flex min-w-0 flex-1 flex-col gap-px leading-tight">
                           <div class="flex min-w-0 items-center gap-1">
                             <span
@@ -1262,8 +1286,18 @@
                             >{col.dataType ?? col.data_type}</span
                           >
                         </div>
-                        <ArrowUpDown class="size-3 shrink-0 opacity-30" />
-                      </div>
+                        {#if isSorted}
+                          <span class="shrink-0 text-primary/70">
+                            {#if rowSort?.direction === 'asc'}
+                              <svg class="size-3" viewBox="0 0 12 12" fill="none"><path d="M6 9V3M3 6l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            {:else}
+                              <svg class="size-3" viewBox="0 0 12 12" fill="none"><path d="M6 3v6M3 6l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            {/if}
+                          </span>
+                        {:else}
+                          <ArrowUpDown class="size-3 shrink-0 opacity-0 transition-opacity group-hover/th:opacity-30" />
+                        {/if}
+                      </button>
                       <ColumnResizeHandle
                         onresizestart={() => startColumnResize(col.name)}
                         onresize={applyColumnResize}

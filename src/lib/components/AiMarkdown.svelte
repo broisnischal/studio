@@ -6,9 +6,34 @@
 
   let { content = '', class: className = '', debounceMs = 0, streaming = false } = $props()
 
+  /** Style markdown images and replace broken ones with a link fallback (no "?" placeholder). */
+  function enhanceImages(/** @type {HTMLElement} */ node) {
+    node.querySelectorAll('img:not([data-img-enhanced])').forEach((el) => {
+      const img = /** @type {HTMLImageElement} */ (el)
+      img.setAttribute('data-img-enhanced', '1')
+      img.loading = 'lazy'
+      img.style.maxWidth = '100%'
+      img.style.height = 'auto'
+      img.style.borderRadius = '8px'
+      img.style.cursor = 'zoom-in'
+      img.addEventListener('error', () => {
+        const url = img.getAttribute('src') ?? ''
+        const link = document.createElement('a')
+        link.href = url
+        link.target = '_blank'
+        link.rel = 'noopener noreferrer'
+        link.textContent = img.getAttribute('alt') ? `Image: ${img.getAttribute('alt')}` : 'Open image'
+        link.className =
+          'inline-flex max-w-full items-center gap-1 truncate rounded-md border border-[var(--border)] bg-[var(--muted)]/30 px-2 py-1 text-[var(--muted-foreground)] no-underline hover:text-[var(--foreground)]'
+        img.replaceWith(link)
+      }, { once: true })
+    })
+  }
+
   /** @param {HTMLElement} node */
   function copyButtons(node) {
     function inject() {
+      enhanceImages(node)
       node.querySelectorAll('pre.shiki:not([data-copy-injected])').forEach((pre) => {
         pre.setAttribute('data-copy-injected', '1')
         pre.style.position = 'relative'
@@ -52,11 +77,14 @@
   $effect(() => {
     const md = content
     const theme = appTheme
-    // During streaming: render synchronously without highlighting to keep up with tokens.
-    // After streaming ends the item is replaced so no re-render needed here.
+    // During streaming: show raw text without markdown parsing — avoids O(n²) work
+    // as content grows. When streaming ends the item is replaced with a fully
+    // syntax-highlighted assistant item, so no re-render of this instance needed.
     if (streaming) {
       if (!md.trim()) { html = ''; return }
-      html = /** @type {string} */ (marked.parse(md, { breaks: true, gfm: true }))
+      html = '<p style="white-space:pre-wrap">' +
+        md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+        '</p>'
       return
     }
 

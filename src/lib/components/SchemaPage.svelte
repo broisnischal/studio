@@ -16,6 +16,7 @@
     /** @type {{ name: string, kind?: string }[]} */
     tables = [],
     loading = false,
+    active = false,
     onrefresh = () => {},
   } = $props()
 
@@ -57,6 +58,13 @@
     : matViews.length
   )
 </script>
+
+<svelte:window onkeydown={(e) => {
+  if (!active) return
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'r') {
+    e.preventDefault(); onrefresh()
+  }
+}} />
 
 <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
   <!-- Toolbar -->
