@@ -1884,7 +1884,11 @@
 
 <McpPanel bind:open={showMcpPanel} connected={!!connection} />
 
-<SettingsDialog bind:open={showSettingsModal} onopenmcp={() => (showMcpPanel = true)} />
+<SettingsDialog
+  bind:open={showSettingsModal}
+  onopenmcp={() => (showMcpPanel = true)}
+  onopenmodelconfiguration={() => (showAiModelSettings = true)}
+/>
 
 <AiSettingsDialog bind:open={showAiModelSettings} />
 
