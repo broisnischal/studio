@@ -155,7 +155,7 @@
       </div>
     </div>
 
-    <div class="app-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
+    <div class="app-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5 [will-change:transform]">
       {#if tab === 'history'}
         {#each filteredHistory as entry (entry.id)}
           <div class="group relative flex items-stretch">

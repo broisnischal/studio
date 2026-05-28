@@ -74,20 +74,22 @@
 
   const appTheme = $derived($appThemeId)
 
+  // Streaming: re-render on every content change using fast synchronous parse.
+  // No syntax highlighting — when streaming ends, item is replaced with a fully
+  // highlighted assistant item anyway.
   $effect(() => {
+    if (!streaming) return
+    const md = content
+    if (!md.trim()) { html = ''; return }
+    const result = marked.parse(md, { breaks: true, gfm: true })
+    html = typeof result === 'string' ? result : ''
+  })
+
+  // Non-streaming: full async render with syntax highlighting + optional debounce.
+  $effect(() => {
+    if (streaming) return
     const md = content
     const theme = appTheme
-    // During streaming: show raw text without markdown parsing — avoids O(n²) work
-    // as content grows. When streaming ends the item is replaced with a fully
-    // syntax-highlighted assistant item, so no re-render of this instance needed.
-    if (streaming) {
-      if (!md.trim()) { html = ''; return }
-      html = '<p style="white-space:pre-wrap">' +
-        md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-        '</p>'
-      return
-    }
-
     const wait = debounceMs
     let cancelled = false
     /** @type {ReturnType<typeof setTimeout> | undefined} */

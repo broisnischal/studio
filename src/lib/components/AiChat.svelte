@@ -1468,7 +1468,7 @@
       {/if}
 
       <!-- ── Main chat area ─────────────────────────────────────────────── -->
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
 
         <!-- Header -->
         <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -1526,7 +1526,7 @@
         <!-- Messages -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div bind:this={scrollEl} onscroll={onScrollAreaScroll} class="app-scroll min-h-0 flex-1 overflow-y-auto relative"
+        <div bind:this={scrollEl} onscroll={onScrollAreaScroll} class="app-scroll min-h-0 flex-1 overflow-y-auto relative [will-change:transform] [overflow-anchor:none]"
           onclick={(e) => {
             const img = /** @type {HTMLElement} */ (e.target)?.closest?.('img')
             if (img instanceof HTMLImageElement && img.closest('.prose-ai')) {
@@ -1825,24 +1825,24 @@
           {/if}
           </div>
 
-          <!-- Jump-to-bottom button: shown when user has scrolled up during streaming -->
-          {#if userScrolledUp && loading}
-            <div class="pointer-events-none sticky bottom-3 flex justify-center">
-              <button
-                type="button"
-                onclick={jumpToBottom}
-                class="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-ui-xs font-medium text-foreground shadow-md transition-all hover:bg-accent"
-              >
-                <ChevronDown class="size-3.5" />
-                Jump to latest
-              </button>
-            </div>
-          {/if}
         </div>
 
         <!-- Error bar -->
         {#if error}
           <div class="shrink-0 border-t border-destructive/30 bg-destructive/8 px-3 py-2 text-ui-xs text-destructive">{error}</div>
+        {/if}
+
+        <!-- Jump-to-bottom button: shown whenever user has scrolled away from bottom -->
+        {#if userScrolledUp}
+          <div class="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center">
+            <button
+              type="button"
+              onclick={jumpToBottom}
+              class="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-ui-xs font-medium text-foreground shadow-lg transition-all hover:bg-accent"
+            >
+              <ChevronDown class="size-3.5" />Jump to bottom
+            </button>
+          </div>
         {/if}
 
         <!-- Input -->

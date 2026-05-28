@@ -221,7 +221,7 @@
   </div>
 
   <!-- Log list -->
-  <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-1.5">
+  <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-1.5 [will-change:transform]">
     {#if filtered.length === 0}
       <div
         class="flex h-full flex-col items-center justify-center gap-3 text-center"

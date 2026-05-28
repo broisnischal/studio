@@ -242,7 +242,7 @@
   </div>
 
   <!-- Content -->
-  <div class="min-h-0 flex-1 overflow-auto">
+  <div class="app-scroll min-h-0 flex-1 overflow-auto [will-change:transform]">
     <!-- Roles -->
     {#if activeTab === "roles"}
       <div

@@ -122,7 +122,7 @@
   </div>
 
   <!-- Content -->
-  <div class="min-h-0 flex-1 overflow-y-auto p-4">
+  <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-4 [will-change:transform]">
 
     <!-- ── Indexes ── -->
     {#if activeType === 'indexes'}

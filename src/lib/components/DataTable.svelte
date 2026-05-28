@@ -149,9 +149,16 @@
   let collapsedColumns = $state(/** @type {Set<string>} */ (new Set()))
 
   // ── Virtual scroll ────────────────────────────────────────────────────────
-  const VIRTUAL_THRESHOLD = 500
-  const ROW_HEIGHT = 28
-  const OVERSCAN = 15
+  // Threshold lowered so 100+ row tables get virtualization instead of full DOM render.
+  // ROW_HEIGHT matches actual rendered height: text-ui-sm (~14.77px) × line-height 1.25
+  // = ~18.5px content + 4px py-0.5 padding = ~23px; 24 gives a safe 1px margin.
+  // OVERSCAN at 10 pre-renders ~240px outside the viewport on each side — enough
+  // buffer for fast scrolling without keeping hundreds of offscreen rows alive.
+  const VIRTUAL_THRESHOLD = 100
+  // Row height: gutter-inner has min-height 1.75rem; at --app-font-size:14px that is
+  // 1.75 × 14 = 24.5px → 25px rendered. Add 1px for subpixel headroom → 26.
+  const ROW_HEIGHT = 26
+  const OVERSCAN = 10
   let _scrollTop = $state(0)
   let _viewportHeight = $state(600)
 
@@ -926,14 +933,20 @@
       if (rafId) return
       rafId = requestAnimationFrame(() => {
         rafId = 0
-        _scrollTop = container.scrollTop
+        const st = container.scrollTop
+        if (st !== _scrollTop) _scrollTop = st
       })
     }
-    const ro = new ResizeObserver(() => { _viewportHeight = container.clientHeight })
+    let roRafId = 0
+    const ro = new ResizeObserver(() => {
+      if (roRafId) return
+      roRafId = requestAnimationFrame(() => { roRafId = 0; _viewportHeight = container.clientHeight })
+    })
     container.addEventListener('scroll', onScroll, { passive: true })
     ro.observe(container)
     return () => {
       if (rafId) cancelAnimationFrame(rafId)
+      if (roRafId) cancelAnimationFrame(roRafId)
       container.removeEventListener('scroll', onScroll)
       ro.disconnect()
     }
@@ -1119,7 +1132,7 @@
           {...props}
           tabindex={-1}
           class={cn(
-            "app-scroll relative overflow-auto bg-panel select-none outline-none [scrollbar-gutter:stable] [contain:layout] [will-change:scroll-position]",
+            "app-scroll relative overflow-auto bg-panel select-none outline-none [scrollbar-gutter:stable] [contain:layout_paint] [will-change:transform] [overflow-anchor:none]",
             embedded ? "max-h-80" : "min-h-0 flex-1",
             resizingColName && "cursor-col-resize",
           )}

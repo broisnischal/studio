@@ -350,6 +350,13 @@
   :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto) {
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
+    /* Prevent scroll from chaining to the parent when this container hits its boundary */
+    overscroll-behavior: contain;
+  }
+
+  /* bits-ui ScrollArea viewport */
+  [data-slot='scroll-area-viewport'] {
+    overscroll-behavior: contain;
   }
 
   :is(.app-scroll, .overflow-auto, .overflow-y-auto, .overflow-x-auto)::-webkit-scrollbar {

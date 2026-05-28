@@ -131,6 +131,19 @@
   let inputRef = $state(null);
   /** @type {HTMLDivElement | null} */
   let scrollEl = $state(null);
+  /** True when user has manually scrolled away from bottom during streaming */
+  let userScrolledUp = $state(false);
+
+  function onScrollAreaScroll() {
+    if (!scrollEl) return;
+    const distFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    userScrolledUp = distFromBottom > 80;
+  }
+
+  function jumpToBottom() {
+    userScrolledUp = false;
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
 
   // ── Conversations (IndexedDB, source: 'sidebar') ───────────────────────────
   /** @type {import('$lib/stores/conversations.js').Conversation[]} */
@@ -312,6 +325,7 @@
 
   let rafId = /** @type {number | null} */ (null);
   function scrollBottomSoon() {
+    if (userScrolledUp) return;
     if (rafId !== null) return;
     rafId = requestAnimationFrame(() => {
       rafId = null;
@@ -320,6 +334,7 @@
   }
   async function scrollBottom() {
     await tick();
+    userScrolledUp = false;
     if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
@@ -1125,7 +1140,7 @@
           </button>
         {/if}
       </div>
-      <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-1">
+      <div class="app-scroll min-h-0 flex-1 overflow-y-auto p-1 [will-change:transform]">
         {#if convList.length === 0}
           <p class="px-3 py-6 text-center text-ui-xs text-muted-foreground/60">
             No saved chats yet
@@ -1167,7 +1182,8 @@
   <!-- Messages -->
   <div
     bind:this={scrollEl}
-    class="app-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3"
+    onscroll={onScrollAreaScroll}
+    class="app-scroll relative min-h-0 flex-1 overflow-y-auto px-3 py-3 [will-change:transform] [overflow-anchor:none]"
   >
     {#if items.length === 0}
       <div
@@ -1531,6 +1547,7 @@
         <span class="min-w-0 break-words">{error}</span>
       </div>
     {/if}
+
   </div>
 
   <!-- Input -->
@@ -1572,4 +1589,16 @@
       {/if}
     </div>
   </div>
+
+  {#if userScrolledUp}
+    <div class="pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center">
+      <button
+        type="button"
+        onclick={jumpToBottom}
+        class="pointer-events-auto flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-ui-2xs font-medium text-foreground shadow-lg transition-all hover:bg-accent"
+      >
+        <ChevronDown class="size-3" />Jump to bottom
+      </button>
+    </div>
+  {/if}
 </div>
