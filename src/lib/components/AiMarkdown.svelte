@@ -63,10 +63,46 @@
       })
     }
 
+    /**
+     * Forward vertical-dominant wheel events out of <pre> code blocks.
+     *
+     * The `.prose-ai pre` global CSS sets `overflow-x: auto` so wide code can
+     * scroll horizontally. But WebKitGTK treats that as a wheel-event consumer
+     * for ALL wheel directions, so vertical scrolling over a code block dies
+     * inside the <pre> and never reaches the AI chat scroll container.
+     *
+     * Capture-phase listener intercepts the wheel before <pre>'s default scroll
+     * runs, redirects deltaY to the nearest vertically-scrollable ancestor, and
+     * leaves horizontal wheel untouched so horizontal code scroll still works.
+     */
+    function onWheelCapture(/** @type {WheelEvent} */ e) {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+      const target = e.target instanceof Element ? e.target : null
+      if (!target?.closest('pre')) return
+      let parent = /** @type {HTMLElement | null} */ (node.parentElement)
+      while (parent) {
+        if (parent.scrollHeight > parent.clientHeight) {
+          const oy = getComputedStyle(parent).overflowY
+          if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') {
+            e.preventDefault()
+            parent.scrollTop += e.deltaY
+            return
+          }
+        }
+        parent = parent.parentElement
+      }
+    }
+
     const obs = new MutationObserver(inject)
     obs.observe(node, { childList: true, subtree: true })
     inject()
-    return { destroy() { obs.disconnect() } }
+    node.addEventListener('wheel', onWheelCapture, { capture: true, passive: false })
+    return {
+      destroy() {
+        obs.disconnect()
+        node.removeEventListener('wheel', onWheelCapture, true)
+      },
+    }
   }
 
   let html = $state('')

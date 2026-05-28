@@ -15,6 +15,7 @@
   import Keyboard    from '@lucide/svelte/icons/keyboard'
   import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right'
   import ArrowDownToLine from '@lucide/svelte/icons/arrow-down-to-line'
+  import Info from '@lucide/svelte/icons/info'
   import History from '@lucide/svelte/icons/history'
   import Bookmark from '@lucide/svelte/icons/bookmark'
   import ShieldCheck from '@lucide/svelte/icons/shield-check'
@@ -51,6 +52,7 @@
     onopensecurity = () => {},
     onopenlogs = () => {},
     onopenshortcuts = () => {},
+    onopenabout = () => {},
     oncheckupdate = () => {},
     /** @param {'postgres'|'mysql'} dbType */
     ondockerlaunch = (dbType) => {},
@@ -237,6 +239,10 @@
             <Keyboard class="size-4 shrink-0 opacity-60" />
             <span data-slot="command-label" class="truncate">Keyboard shortcuts</span>
             <Command.Shortcut keys="?" />
+          </Command.Item>
+          <Command.Item value="about license version info app" onSelect={() => run(onopenabout)}>
+            <Info class="size-4 shrink-0 opacity-60" />
+            <span data-slot="command-label" class="truncate">About DB Studio</span>
           </Command.Item>
           <Command.Item value="check for updates upgrade version" onSelect={() => run(oncheckupdate)}>
             <ArrowDownToLine class="size-4 shrink-0 opacity-60" />

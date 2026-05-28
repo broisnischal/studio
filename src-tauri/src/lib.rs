@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod docker;
+mod license;
 mod mcp;
 mod secrets;
 
@@ -103,6 +104,13 @@ pub fn run() {
             secrets::ai_store_key,
             secrets::ai_load_key,
             secrets::ai_delete_key,
+            commands::check_license_status,
+            commands::activate_license,
+            commands::deactivate_license,
+            #[cfg(debug_assertions)]
+            commands::debug_set_trial_days_ago,
+            #[cfg(debug_assertions)]
+            commands::debug_reset_trial,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

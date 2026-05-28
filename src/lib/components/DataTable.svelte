@@ -1132,7 +1132,7 @@
           {...props}
           tabindex={-1}
           class={cn(
-            "app-scroll relative overflow-auto bg-panel select-none outline-none [scrollbar-gutter:stable] [contain:layout_paint] [will-change:transform] [overflow-anchor:none]",
+            "app-scroll relative overflow-auto bg-panel select-none outline-none [scrollbar-gutter:stable] [contain:layout] [will-change:transform] [overflow-anchor:none]",
             embedded ? "max-h-80" : "min-h-0 flex-1",
             resizingColName && "cursor-col-resize",
           )}

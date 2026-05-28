@@ -28,7 +28,9 @@
   import SettingsDialog from './SettingsDialog.svelte'
   import KeyboardShortcutsDialog from './KeyboardShortcutsDialog.svelte'
   import InsiderDialog from './InsiderDialog.svelte'
+  import AboutDialog from './AboutDialog.svelte'
   import UpdateDialog from './UpdateDialog.svelte'
+  import DisconnectDialog from './DisconnectDialog.svelte'
   import InsertRowDialog from './InsertRowDialog.svelte'
   import McpPanel from './McpPanel.svelte'
   import OrmRunner from './OrmRunner.svelte'
@@ -155,6 +157,8 @@
   let showSettingsModal = $state(false)
   let showShortcutsModal = $state(false)
   let showInsiderModal = $state(false)
+  let showAboutModal = $state(false)
+  let showDisconnectDialog = $state(false)
   let showAiModelSettings = $state(false)
   let commandOpen = $state(false)
   /** @type {import('./UpdateDialog.svelte').default | null} */
@@ -1529,6 +1533,10 @@
     saveAiMode(false)
   }
 
+  function requestDisconnect() {
+    showDisconnectDialog = true
+  }
+
   async function handleDisconnect() {
     recordActivity({ type: 'disconnect', title: `Disconnected from ${connection?.name ?? 'database'}`, success: true })
     try {
@@ -1860,6 +1868,7 @@
 
 <Onboarding bind:open={showOnboarding} onconnect={() => (showConnectionModal = true)} />
 <ConnectionModal bind:open={showConnectionModal} onconnected={(conn, id) => onConnected(conn, id)} />
+<DisconnectDialog bind:open={showDisconnectDialog} connectionName={connection?.name ?? ''} ondisconnect={handleDisconnect} />
 <CreateTableDialog
   bind:open={showCreateTableDialog}
   {activeSchema}
@@ -1888,6 +1897,7 @@
   bind:open={showSettingsModal}
   onopenmcp={() => (showMcpPanel = true)}
   onopenmodelconfiguration={() => (showAiModelSettings = true)}
+  onopenabout={() => (showAboutModal = true)}
 />
 
 <AiSettingsDialog bind:open={showAiModelSettings} />
@@ -1895,6 +1905,8 @@
 <KeyboardShortcutsDialog bind:open={showShortcutsModal} />
 
 <InsiderDialog bind:open={showInsiderModal} />
+
+<AboutDialog bind:open={showAboutModal} />
 
 <UpdateDialog bind:this={updateDialog} />
 
@@ -1912,7 +1924,7 @@
   onopentable={() => { if (aiMode) exitAiMode(); void focusDataView() }}
   onopensettings={() => (showSettingsModal = true)}
   onopenconnection={() => (showConnectionModal = true)}
-  ondisconnect={handleDisconnect}
+  ondisconnect={requestDisconnect}
   onrefresh={handleRefresh}
   onopenai={() => openAiTab()}
   onopenaisidebar={() => { if (aiMode) exitAiMode(); toggleAiSidebar() }}
@@ -1923,6 +1935,7 @@
   onopensecurity={() => { if (aiMode) exitAiMode(); openSecurityTab() }}
   onopenlogs={() => { if (aiMode) exitAiMode(); openLogsTab() }}
   onopenshortcuts={() => (showShortcutsModal = true)}
+  onopenabout={() => (showAboutModal = true)}
   oncheckupdate={() => void updateDialog?.checkNow()}
   ondockerlaunch={(dbType) => { commandOpen = false; dockerInitialDb = dbType; showDockerModal = true }}
   onswitchdatabase={handleSwitchDatabase}
@@ -1966,7 +1979,7 @@
         ontablefilter={(v) => (tableFilter = v)}
         onviewchange={handleSidebarViewChange}
         onrefresh={handleRefresh}
-        ondisconnect={handleDisconnect}
+        ondisconnect={requestDisconnect}
         onopensettings={() => (showSettingsModal = true)}
         onopencommand={() => (commandOpen = true)}
         onopenSchema={openSchemaTab}

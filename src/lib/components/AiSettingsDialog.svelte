@@ -10,7 +10,6 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
-  import * as Select from "$lib/components/ui/select/index.js";
   import { cn } from "$lib/utils.js";
   import { chatCompletionRaw } from "$lib/ai.js";
   import {
@@ -69,11 +68,6 @@
   const isOllama = $derived(formProvider === "ollama");
   const isCustom = $derived(formProvider === "custom");
   const needsKey = $derived(!formApiKey && !isOllama && !isCustom);
-  const profileSelectTrigger =
-    "h-10 w-full justify-between gap-2 rounded-lg border-border/80 bg-background px-2.5 text-ui-xs font-normal shadow-none";
-  const providerSelectTrigger =
-    "h-8 w-full justify-between gap-2 rounded-md border-border/80 bg-background px-2.5 text-ui-xs font-normal shadow-none";
-
   /** @param {string} providerId */
   function providerLabel(providerId) {
     return PROVIDERS.find((p) => p.id === providerId)?.label ?? providerId;
@@ -239,7 +233,7 @@
 </script>
 
 <Dialog.Root bind:open onOpenChange={handleOpenChange}>
-  <Dialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-[26rem]">
+  <Dialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-[30rem]">
     <Dialog.Header
       class="flex shrink-0 items-center justify-between border-b border-border/60 px-4 py-3"
     >
@@ -273,111 +267,64 @@
 
     <!-- ── LIST VIEW ──────────────────────────────────────────────────────── -->
     {#if view === "list"}
-      <div
-        class="app-scroll flex max-h-[min(70vh,36rem)] flex-col gap-3 overflow-y-auto p-3"
-      >
-        <div class="space-y-2 rounded-lg border border-border/70 p-2.5">
-          <p
-            class="px-0.5 text-[10px] font-medium tracking-wide text-muted-foreground/70 uppercase"
-          >
-            Active model
-          </p>
-          <Select.Root
-            type="single"
-            value={$activeProfileId}
-            onValueChange={(v) => v && void setActiveProfile(v)}
-          >
-            <Select.Trigger
-              class={profileSelectTrigger}
-              aria-label="Active AI model profile"
-            >
-              <span class="flex min-w-0 items-center gap-2">
+      <div class="app-scroll flex max-h-[min(70vh,36rem)] flex-col overflow-y-auto">
+        {#if $aiProfiles.length === 0}
+          <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+            <p class="text-sm font-medium text-foreground">No models configured</p>
+            <p class="text-xs text-muted-foreground">Add a model to get started with AI features.</p>
+          </div>
+        {:else}
+          <div class="flex flex-col gap-0.5 p-2">
+            {#each $aiProfiles as profile (profile.id)}
+              {@const isActive = profile.id === $activeProfileId}
+              <div
+                class={cn(
+                  "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors cursor-pointer",
+                  isActive ? "bg-accent" : "hover:bg-accent/50"
+                )}
+                role="button"
+                tabindex="0"
+                onclick={() => void setActiveProfile(profile.id)}
+                onkeydown={(e) => e.key === 'Enter' && void setActiveProfile(profile.id)}
+              >
                 <span
                   class={cn(
-                    "inline-flex size-5 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold tracking-wide",
-                    providerMarkClass(activeProfile?.provider ?? "custom"),
+                    "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide",
+                    providerMarkClass(profile.provider),
                   )}
                 >
-                  {providerMark(activeProfile?.provider ?? "custom")}
+                  {providerMark(profile.provider)}
                 </span>
-                <span class="min-w-0 text-left">
-                  <span
-                    class="block truncate text-ui-xs font-medium text-foreground"
-                  >
-                    {activeProfile?.name ?? "Select model"}
-                  </span>
-                  <span
-                    class="block truncate font-mono text-[10px] text-muted-foreground/80"
-                  >
-                    {activeProfile?.model ?? ""}
-                  </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-xs font-medium text-foreground">{profile.name}</span>
+                  <span class="block truncate font-mono text-[10px] text-muted-foreground/70">{profile.model}</span>
                 </span>
-              </span>
-            </Select.Trigger>
-            <Select.Content
-              class="z-[120] max-h-[min(22rem,65vh)] w-[var(--bits-select-anchor-width)] min-w-[16rem] p-1"
-              sideOffset={6}
-            >
-              {#each $aiProfiles as profile (profile.id)}
-                <Select.Item
-                  value={profile.id}
-                  label={profile.name}
-                  class="rounded-md py-1.5 pr-8 pl-2"
+                {#if isActive}
+                  <span class="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-[9px] font-medium text-primary">Active</span>
+                {/if}
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:opacity-100"
+                  onclick={(e) => { e.stopPropagation(); void startEdit(profile) }}
                 >
-                  {#snippet children()}
-                    <span class="flex min-w-0 items-center gap-2">
-                      <span
-                        class={cn(
-                          "inline-flex size-5 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold tracking-wide",
-                          providerMarkClass(profile.provider),
-                        )}
-                      >
-                        {providerMark(profile.provider)}
-                      </span>
-                      <span class="min-w-0">
-                        <span class="block truncate text-ui-xs font-medium"
-                          >{profile.name}</span
-                        >
-                        <span
-                          class="block truncate font-mono text-[10px] text-muted-foreground/80"
-                        >
-                          {profile.model}
-                        </span>
-                      </span>
-                      <span
-                        class="ml-auto rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/60 bg-muted/60"
-                      >
-                        {providerLabel(profile.provider)}
-                      </span>
-                    </span>
-                  {/snippet}
-                </Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
-          {#if activeProfile}
-            <button
-              type="button"
-              class="group flex w-full items-center justify-between rounded-md border border-border/70 px-2.5 py-2 text-left text-ui-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
-              onclick={() => void startEdit(activeProfile)}
-            >
-              <span class="truncate">Configure selected model</span>
-              <ChevronRight
-                class="size-3.5 shrink-0 opacity-60 transition-transform group-hover:translate-x-0.5"
-              />
-            </button>
-          {/if}
-        </div>
+                  Edit
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <!-- Add model button -->
-        <button
-          type="button"
-          class="flex items-center gap-2 rounded-lg border border-dashed border-border/60 px-3 py-2.5 text-ui-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-          onclick={startAdd}
-        >
-          <Plus class="size-3.5" />
-          Add model
-        </button>
+        <div class="border-t border-border/40 p-2">
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            onclick={startAdd}
+          >
+            <Plus class="size-3.5" />
+            Add model
+          </button>
+        </div>
       </div>
 
       <!-- ── ADD / EDIT VIEW ───────────────────────────────────────────────── -->
@@ -387,58 +334,33 @@
       >
         <!-- Provider picker -->
         <div class="flex flex-col gap-2">
-          <p
-            class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60"
-          >
+          <p class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
             Provider
           </p>
-          <Select.Root
-            type="single"
-            value={formProvider}
-            onValueChange={(v) => v && selectProvider(v)}
-          >
-            <Select.Trigger class={providerSelectTrigger} aria-label="Provider">
-              <span class="flex min-w-0 items-center gap-2">
+          <div class="grid grid-cols-4 gap-1.5">
+            {#each PROVIDERS as p (p.id)}
+              <button
+                type="button"
+                class={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2.5 transition-colors",
+                  formProvider === p.id
+                    ? "border-primary/40 bg-primary/5 text-foreground"
+                    : "border-border/60 text-muted-foreground hover:border-border hover:bg-accent/40 hover:text-foreground"
+                )}
+                onclick={() => selectProvider(p.id)}
+              >
                 <span
                   class={cn(
-                    "inline-flex size-4 shrink-0 items-center justify-center rounded text-[8px] font-semibold tracking-wide",
-                    providerMarkClass(formProvider),
+                    "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide",
+                    providerMarkClass(p.id),
                   )}
                 >
-                  {providerMark(formProvider)}
+                  {providerMark(p.id)}
                 </span>
-                <span class="truncate text-ui-xs"
-                  >{providerLabel(formProvider)}</span
-                >
-              </span>
-            </Select.Trigger>
-            <Select.Content
-              class="z-[120] w-[var(--bits-select-anchor-width)] min-w-[12rem] p-1"
-              sideOffset={6}
-            >
-              {#each PROVIDERS as p (p.id)}
-                <Select.Item
-                  value={p.id}
-                  label={p.label}
-                  class="rounded-md py-1.5 pr-8 pl-2"
-                >
-                  {#snippet children()}
-                    <span class="flex min-w-0 items-center gap-2">
-                      <span
-                        class={cn(
-                          "inline-flex size-4 shrink-0 items-center justify-center rounded text-[8px] font-semibold tracking-wide",
-                          providerMarkClass(p.id),
-                        )}
-                      >
-                        {providerMark(p.id)}
-                      </span>
-                      <span class="truncate text-ui-xs">{p.label}</span>
-                    </span>
-                  {/snippet}
-                </Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
+                <span class="text-[10px] font-medium leading-tight">{p.label}</span>
+              </button>
+            {/each}
+          </div>
         </div>
 
         <!-- Model presets (not shown for custom) -->
